@@ -7,8 +7,8 @@ import { EmbedBridge } from "@/components/EmbedBridge";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Nova Studio - AI 视频/图像生成器",
-  description: "Nova Studio AI 视频/图像生成工作台",
+  title: "麦迅工坊 - 生图与 Agent 工作台",
+  description: "Maixun Studio · 生图与 Agent 工作台",
   icons: {
     icon: [
       { url: '/favicon.png', type: 'image/png' },

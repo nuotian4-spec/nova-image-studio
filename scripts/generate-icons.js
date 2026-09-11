@@ -1,15 +1,17 @@
 /**
- * 从 coai.png 生成 PWA 所需的各尺寸图标
+ * 从 frontend/brand-maixun.png 生成 PWA 所需的各尺寸图标
  * 用法: node scripts/generate-icons.js
  */
-const sharp = require('sharp');
 const path = require('path');
 const fs = require('fs');
 
 const ROOT = path.resolve(__dirname, '..');
-const SRC = path.join(ROOT, 'coai.png');
-const PUBLIC = path.join(ROOT, 'public');
-const APP = path.join(ROOT, 'src', 'app');
+const FRONTEND = path.join(ROOT, 'frontend');
+const SRC = path.join(FRONTEND, 'brand-maixun.png');
+const PUBLIC = path.join(FRONTEND, 'public');
+const APP = path.join(FRONTEND, 'src', 'app');
+const sharp = require(require.resolve('sharp', { paths: [FRONTEND, ROOT] }));
+const ICON_BG = { r: 0, g: 0, b: 0, alpha: 1 };
 
 const tasks = [
     { out: 'icon-192.png', size: 192, maskable: false },
@@ -39,7 +41,7 @@ const tasks = [
             const iconSize = size - padding * 2;
 
             const resized = await sharp(SRC)
-                .resize(iconSize, iconSize, { fit: 'cover', position: 'centre' })
+                .resize(iconSize, iconSize, { fit: 'contain', background: ICON_BG })
                 .png()
                 .toBuffer();
 
@@ -49,7 +51,7 @@ const tasks = [
                         width: size,
                         height: size,
                         channels: 4,
-                        background: { r: 245, g: 245, b: 250, alpha: 1 }, // #f5f5fa 与 theme background 一致
+                        background: ICON_BG,
                     },
                 }).composite([{ input: resized, left: padding, top: padding }])
             ).toFile(dst);
@@ -57,7 +59,7 @@ const tasks = [
             console.log(`✅ ${out} (${size}x${size}, maskable, icon区 ${iconSize}x${iconSize})`);
         } else {
             await save(
-                sharp(SRC).resize(size, size, { fit: 'cover', position: 'centre' })
+                sharp(SRC).resize(size, size, { fit: 'contain', background: ICON_BG })
             ).toFile(dst);
 
             console.log(`✅ ${out} (${size}x${size})`);

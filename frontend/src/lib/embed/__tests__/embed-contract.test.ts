@@ -81,6 +81,7 @@ describe('hideVideo', () => {
     expect(shouldHideVideoTab({ embedded: false, hideVideo: false })).toBe(false);
     const values = getWorkspaceModeTabs({ hideVideo: true }).map((tab) => tab.value);
     expect(values).not.toContain('video-generation');
+    expect(values).not.toContain('prompt-gallery');
     expect(values).toContain('image-generation');
   });
 
@@ -88,6 +89,20 @@ describe('hideVideo', () => {
     expect(readEmbeddedQuery('?embedded=1')).toBe(true);
     expect(readEmbeddedQuery('?foo=1')).toBe(false);
     expect(readEmbeddedQuery('')).toBe(false);
+  });
+
+  it('embedded 时 getWorkspaceModeTabs 含 prompt-gallery、不含 video-generation', () => {
+    resetEmbedRuntimeForTests();
+    enableEmbeddedModeForTests();
+    expect(isEmbeddedMode()).toBe(true);
+    const values = getWorkspaceModeTabs().map((tab) => tab.value);
+    expect(values).toContain('prompt-gallery');
+    expect(values).not.toContain('video-generation');
+    expect(values).toContain('image-generation');
+  });
+
+  afterEach(() => {
+    resetEmbedRuntimeForTests();
   });
 });
 

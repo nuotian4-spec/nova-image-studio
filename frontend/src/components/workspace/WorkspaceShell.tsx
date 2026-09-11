@@ -75,7 +75,12 @@ export function WorkspaceShell() {
   const [referenceDraft, setReferenceDraft] = useState<{ id: number; refImages: RefImageData[]; prompt?: string } | null>(null);
   const workspace = useWorkspaceJobs();
   const galleryConfig = usePromptGalleryConfig();
-  const promptGallery = usePromptGalleryAccess(galleryConfig.mode, galleryConfig.passwordEnabled, setError, () => setActiveTab('prompt-gallery'));
+  const promptGallery = usePromptGalleryAccess(
+    embed.enabled ? '1' : galleryConfig.mode,
+    embed.enabled ? false : galleryConfig.passwordEnabled,
+    setError,
+    () => setActiveTab('prompt-gallery'),
+  );
 
   // Toast state
   const [toasts, setToasts] = useState<ToastData[]>([]);
@@ -278,21 +283,21 @@ export function WorkspaceShell() {
                   type="button"
                   onClick={promptGallery.handlePromptGalleryEntry}
                   className="flex items-center gap-2 px-2 pt-3 pb-1 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-label="Nova Studio logo"
+                  aria-label="麦迅工坊"
                 >
                   <img
                     src={withBasePath('/favicon.png')}
-                    alt="Nova Studio"
+                    alt="麦迅工坊"
                     className="h-8 w-8 shrink-0 rounded-lg object-cover ring-1 ring-border/60"
                   />
                   <div className="min-w-0">
-                    <h2 className="truncate text-base font-semibold tracking-tight leading-tight">Nova Studio</h2>
-                    <p className="truncate text-[11px] text-muted-foreground leading-tight">批量 API 图像生成器</p>
+                    <h2 className="truncate text-base font-semibold tracking-tight leading-tight">麦迅工坊</h2>
+                    <p className="truncate text-[11px] text-muted-foreground leading-tight">生图与 Agent 工作台</p>
                   </div>
                 </button>
               )}
               <div className={cn(wideMode ? 'flex flex-col py-4 flex-1' : 'flex flex-col py-1')}>
-                <WorkspaceModeTabs wideMode={wideMode} showPromptGallery={promptGallery.showPromptGallery} hideVideo={embed.hideVideo} />
+                <WorkspaceModeTabs wideMode={wideMode} showPromptGallery={promptGallery.showPromptGallery || embed.enabled} hideVideo={embed.hideVideo} />
               </div>
 
               {wideMode && (
@@ -377,8 +382,8 @@ export function WorkspaceShell() {
                     {embed.enabled && !embed.waitingForConfig && !workspace.hasImageKey && <div className="mb-3"><EmbedCapabilityNotice kind="image" /></div>}
                     <ImageGenerationWorkbench
                       wideMode={wideMode}
-                      onSubmitText={data => void submitTextToImage(data, submitActions, handleSubmitError)}
-                      onSubmitImage={data => void submitImageToImage(data, submitActions, handleSubmitError)}
+                      onSubmitText={data => submitTextToImage(data, submitActions, handleSubmitError)}
+                      onSubmitImage={data => submitImageToImage(data, submitActions, handleSubmitError)}
                       disabled={embed.enabled ? !workspace.hasImageKey : !workspace.hasApiKey}
                       onConfigureApiKey={() => openSettings()}
                       onDraftConsumed={handleImageDraftConsumed}
@@ -457,7 +462,7 @@ export function WorkspaceShell() {
                   onConfigureApiKey={() => openSettings()}
                   onEnableWideMode={() => { if (!wideMode) toggleWideMode(); }}
                   showToast={showToast}
-                  showPromptGallery={promptGallery.showPromptGallery}
+                  showPromptGallery={promptGallery.showPromptGallery || embed.enabled}
                 />
               </TabsContent>
 
@@ -495,7 +500,7 @@ export function WorkspaceShell() {
                 />
               </TabsContent>
 
-              {promptGallery.showPromptGallery && (
+              {(promptGallery.showPromptGallery || embed.enabled) && (
                 <TabsContent value="prompt-gallery" keepMounted>
                   <div className={cn('bg-transparent p-0 shadow-none sm:rounded-2xl sm:bg-card sm:p-4 sm:shadow-sm sm:border sm:border-border', wideMode && 'sm:p-5')}>
                     <PromptGallery wideMode={wideMode} />

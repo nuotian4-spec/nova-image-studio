@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConfirmDialog } from '@/components/workspace/dialogs/ConfirmDialog';
 import type { PromptGalleryMode } from '@/hooks/usePromptGalleryConfig';
+import { isEmbeddedMode, subscribeEmbedRuntime } from '@/lib/embed/mode';
 
 export function usePromptGalleryAccess(
   mode: PromptGalleryMode,
@@ -8,19 +9,33 @@ export function usePromptGalleryAccess(
   onError: (message: string) => void,
   onUnlocked?: () => void,
 ) {
-  const [showPromptGallery, setShowPromptGallery] = useState(mode === '1');
+  const [embedded, setEmbedded] = useState(isEmbeddedMode);
+  const [showPromptGallery, setShowPromptGallery] = useState(mode === '1' || isEmbeddedMode());
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [, setClickCount] = useState(0);
   const clickTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  useEffect(() => subscribeEmbedRuntime(() => setEmbedded(isEmbeddedMode())), []);
+
   useEffect(() => {
+    if (embedded) {
+      setShowPromptGallery(true);
+      setPasswordDialogOpen(false);
+      return;
+    }
     if (mode === '2') return;
 
     setShowPromptGallery(mode === '1');
-  }, [mode]);
+  }, [embedded, mode]);
 
   const handlePromptGalleryEntry = useCallback(() => {
+    if (embedded) {
+      setShowPromptGallery(true);
+      setPasswordDialogOpen(false);
+      onUnlocked?.();
+      return;
+    }
     if (mode === '3') return;
     if (mode === '1' || (mode === '2' && !passwordEnabled)) {
       setShowPromptGallery(true);
@@ -41,7 +56,7 @@ export function usePromptGalleryAccess(
       }, 2000);
       return next;
     });
-  }, [mode, onUnlocked, passwordEnabled, showPromptGallery]);
+  }, [embedded, mode, onUnlocked, passwordEnabled, showPromptGallery]);
 
   const handlePasswordSubmit = useCallback(async () => {
     try {

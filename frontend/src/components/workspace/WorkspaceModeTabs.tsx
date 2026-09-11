@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { Bot, Film, Frame, Images, LibraryBig, ScanSearch, Scissors, Sparkles, Video } from 'lucide-react';
 import { TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { isEmbeddedMode } from '@/lib/embed/mode';
 
 const horizontalTriggerClass =
   'group h-full min-h-0 min-w-0 gap-1 overflow-hidden whitespace-nowrap rounded-xl px-2 py-2 text-xs max-sm:w-14 max-sm:shrink-0 max-sm:flex-none max-sm:data-active:w-auto max-sm:data-active:min-w-[88px] sm:h-[calc(100%-1px)] sm:gap-2 sm:px-3 sm:py-2 sm:text-sm';
@@ -24,10 +25,12 @@ export const WORKSPACE_MODE_TABS = [
 const galleryTab = { value: 'prompt-gallery', icon: LibraryBig, label: '提示词广场' } as const;
 
 export function getWorkspaceModeTabs(options: { hideVideo?: boolean; showPromptGallery?: boolean } = {}) {
-  const base = options.hideVideo
+  const hideVideo = Boolean(options.hideVideo) || isEmbeddedMode();
+  const showPromptGallery = Boolean(options.showPromptGallery) || isEmbeddedMode();
+  const base = hideVideo
     ? WORKSPACE_MODE_TABS.filter((tab) => tab.value !== 'video-generation')
     : [...WORKSPACE_MODE_TABS];
-  return options.showPromptGallery ? [...base, galleryTab] : base;
+  return showPromptGallery ? [...base, galleryTab] : base;
 }
 
 function gridColsClass(count: number): string {
