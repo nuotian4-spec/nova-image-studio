@@ -12,8 +12,10 @@ const pluginRegistry = require('./plugin-runtime/registry');
 const pluginExecutor = require('./plugin-runtime/executor');
 const { validateAndNormalizeInput, InputError } = require('./plugin-runtime/input');
 const { createMediaStore } = require('./plugin-runtime/media');
+const { rewriteParentGatewayBaseUrl } = require('./rewrite-parent-gateway-base-url');
+const { shouldSkipImageStream, shouldRetryImageWithoutStream } = require('./image-stream-fallback');
 
-const ENV_FILE_PATH = path.join(process.cwd(), '.env');
+const ENV_FILE_PATH = process.env.NOVA_ENV_FILE || path.join(process.cwd(), '.env');
 const TASK_STATUS = {
   QUEUED: '排队中',
   LEGACY_QUEUED: 'queued',
@@ -99,6 +101,11 @@ function normalizeProtocolBaseUrl(protocol, url) {
   return normalized.endsWith('/v1') ? normalized.slice(0, -3) : normalized;
 }
 
+// 父页注入的是浏览器可达地址（127.0.0.1 或公网域名），sidecar 内网必须改写成 SUB2API_GATEWAY_URL。
+function resolveParentGatewayBaseUrl(baseUrl) {
+  return rewriteParentGatewayBaseUrl(baseUrl, getRuntimeEnv().SUB2API_GATEWAY_URL);
+}
+
 function resolveNovaApiBaseUrl() {
   return normalizeBaseUrl(getRuntimeEnv().NOVA_API_BASE_URL) || 'https://api.openai.com';
 }
@@ -117,7 +124,6 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const IMAGE_STREAM_ENABLED = String(process.env.NOVA_IMAGE_STREAM ?? 'true').toLowerCase() !== 'false';
 const IMAGE_STREAM_PARTIAL_IMAGES = Math.min(3, Math.max(0, Number.parseInt(process.env.NOVA_IMAGE_PARTIAL_IMAGES || '1', 10) || 1));
-const IMAGE_STREAM_UNSUPPORTED_PATTERN = /(?:(?:stream|partial_images).*(?:unsupported|not supported|unknown|unrecognized|invalid)|(?:unsupported|not supported|unknown|unrecognized|invalid).*(?:stream|partial_images)|(?:stream|partial_images).*(?:不支持|未知|无效)|(?:不支持|未知|无效).*(?:stream|partial_images))/i;
 // 开源版：不再硬编码模型列表，由前端通过 protocol 字段指定协议类型
 const VALID_PROTOCOLS = new Set(['google', 'openai', 'grok']);
 const GPT_IMAGE_QUALITIES = new Set(['auto', 'high', 'medium', 'low']);
@@ -725,7 +731,7 @@ function validateCreatePayload(body) {
   if (!Number.isInteger(body.parallelCount) || body.parallelCount < 1 || body.parallelCount > 4) throw new Error('并发数量无效');
 
   if (!Array.isArray(body.images)) body.images = [];
-  body.baseUrl = normalizeProtocolBaseUrl(body.protocol, body.baseUrl);
+  body.baseUrl = resolveParentGatewayBaseUrl(normalizeProtocolBaseUrl(body.protocol, body.baseUrl));
   if (!body.baseUrl) throw new Error('缺少 API 基础地址');
   // 开源版：不做模型级参数规范化，前端负责传递正确的参数，后端无条件透传
 }
@@ -1117,13 +1123,8 @@ async function parseGptImageResponse(response) {
   return extractImagePayload(data);
 }
 
-function isImageStreamUnsupportedError(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  return IMAGE_STREAM_UNSUPPORTED_PATTERN.test(message);
-}
-
 async function requestGptImage(apiKey, request, resolvedSize, options = {}) {
-  const baseUrl = options.baseUrl || resolveNovaApiBaseUrl();
+  const baseUrl = resolveParentGatewayBaseUrl(options.baseUrl) || resolveNovaApiBaseUrl();
   const endpoint = request.mode === 'image-to-image'
     ? '/v1/images/edits'
     : '/v1/images/generations';
@@ -1209,7 +1210,7 @@ function createGrokImageRequestInit(apiKey, request, options = {}) {
 }
 
 async function requestGrokImage(apiKey, request, options = {}) {
-  const baseUrl = options.baseUrl || resolveNovaApiBaseUrl();
+  const baseUrl = resolveParentGatewayBaseUrl(options.baseUrl) || resolveNovaApiBaseUrl();
   const endpoint = request.mode === 'image-to-image'
     ? '/v1/images/edits'
     : '/v1/images/generations';
@@ -1253,10 +1254,14 @@ async function fetchWithTimeout(url, init) {
 
 async function generateNovaImage(apiKey, request) {
   // 开源版：根据前端传入的 protocol 字段路由到对应的 API 协议
-  const baseUrl = request.baseUrl || resolveNovaApiBaseUrl();
+  const baseUrl = resolveParentGatewayBaseUrl(request.baseUrl) || resolveNovaApiBaseUrl();
   if (request.protocol === 'openai') {
     const resolvedSize = resolveGptImageRequestSize(request);
-    if (!IMAGE_STREAM_ENABLED) {
+    // 嵌入路径：父站 OpenAI 兼容中转拒绝 stream:true；standalone BYOK 仍可先走流式。
+    if (shouldSkipImageStream({
+      gatewayUrl: getRuntimeEnv().SUB2API_GATEWAY_URL,
+      imageStreamEnabled: IMAGE_STREAM_ENABLED,
+    })) {
       return requestGptImage(apiKey, request, resolvedSize, { baseUrl });
     }
     try {
@@ -1266,7 +1271,8 @@ async function generateNovaImage(apiKey, request) {
         partialImages: IMAGE_STREAM_PARTIAL_IMAGES,
       });
     } catch (error) {
-      if (!isImageStreamUnsupportedError(error)) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!shouldRetryImageWithoutStream(message, true)) throw error;
       console.warn('[image-stream] 上游不支持图片流式参数，回退非流式请求');
       return requestGptImage(apiKey, request, resolvedSize, { baseUrl });
     }
@@ -1286,7 +1292,7 @@ function extractGeminiImagePayload(data) {
 }
 
 async function generateNovaGeminiImage(apiKey, request, options = {}) {
-  const baseUrl = options.baseUrl || resolveNovaApiBaseUrl();
+  const baseUrl = resolveParentGatewayBaseUrl(options.baseUrl) || resolveNovaApiBaseUrl();
   const parts = [
     { text: request.prompt },
     ...request.images.map(img => ({ inlineData: { data: img.data, mimeType: img.mimeType } })),
@@ -1476,6 +1482,7 @@ function createPluginTask(body, req) {
     throw error;
   }
 
+  // 插件走第三方凭据 origin，不改写 SUB2API_GATEWAY_URL，避免把 defaultBaseUrl 打到父站网关。
   const baseUrl = normalizeBaseUrl(body.baseUrl) || plugin.manifest.credential.defaultBaseUrl || '';
   if (!baseUrl) {
     throw new Error('缺少 API 基地址，请在设置中填写');
@@ -2115,6 +2122,113 @@ function ackTask(res, taskId) {
   sendJson(res, 200, { ok: true });
 }
 
+function getPromptsFilePath() {
+  const override = String(getRuntimeEnv().NOVA_PROMPTS_PATH || '').trim();
+  return override ? path.resolve(override) : path.join(__dirname, 'prompts.json');
+}
+
+function stableLocalPromptId(item) {
+  if (item && typeof item.id === 'string' && item.id.trim()) return item.id.trim();
+  const title = String(item?.title || '').trim();
+  const type = Number(item?.type) === 2 ? 2 : 1;
+  const content = String(item?.content || '');
+  const digest = createHash('sha256')
+    .update(`local\0${title}\0${type}\0${content}`)
+    .digest('hex')
+    .slice(0, 16);
+  return `local-${digest}`;
+}
+
+function toStoredLocalPrompt(item, fallbackId) {
+  return {
+    id: (typeof item?.id === 'string' && item.id.trim()) ? item.id.trim() : (fallbackId || stableLocalPromptId(item)),
+    title: String(item?.title || ''),
+    content: String(item?.content || ''),
+    type: Number(item?.type) === 2 ? 2 : 1,
+  };
+}
+
+function toPublicLocalPrompt(item) {
+  return {
+    ...toStoredLocalPrompt(item),
+    source: 'local',
+  };
+}
+
+function loadLocalPromptRecords() {
+  const promptsPath = getPromptsFilePath();
+  if (!fs.existsSync(promptsPath)) return [];
+  try {
+    const raw = fs.readFileSync(promptsPath, 'utf8');
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data)) return [];
+    return data.filter(item => item && typeof item === 'object');
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalPromptRecords(records) {
+  const promptsPath = getPromptsFilePath();
+  fs.mkdirSync(path.dirname(promptsPath), { recursive: true });
+  const stored = records.map(item => toStoredLocalPrompt(item));
+  const tmpPath = `${promptsPath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
+  fs.copyFileSync(tmpPath, promptsPath);
+  fs.unlinkSync(tmpPath);
+}
+
+function findLocalPromptIndex(items, id) {
+  const target = String(id || '').trim();
+  if (!target) return -1;
+  return items.findIndex(item => stableLocalPromptId(item) === target);
+}
+
+function getPromptGalleryPasswordFromRequest(req, body) {
+  const header = req.headers['x-prompt-gallery-password'] || req.headers['x-password'];
+  const headerValue = Array.isArray(header) ? header[0] : header;
+  return String(headerValue || body?.password || '');
+}
+
+function assertPromptGalleryWriteAccess(req, body) {
+  const expected = String(getRuntimeEnv().PROMPT_GALLERY_PASSWORD || '').trim();
+  if (!expected) {
+    throw createHttpError(403, 'PROMPT_WRITE_DISABLED', '未配置写入口令');
+  }
+  const provided = getPromptGalleryPasswordFromRequest(req, body);
+  if (!provided || hashPromptGalleryPassword(provided) !== hashPromptGalleryPassword(expected)) {
+    throw createHttpError(403, 'PROMPT_WRITE_UNAUTHORIZED', provided ? '口令错误' : '需要口令');
+  }
+}
+
+function assertLocalPromptSourceWritable(body) {
+  if (body == null || body.source == null || body.source === '') return;
+  const source = String(body.source).trim().toLowerCase();
+  if (source !== 'local' && source !== '本站') {
+    throw createHttpError(403, 'REMOTE_SOURCE_READONLY', '不能写入远程来源的提示词');
+  }
+}
+
+function normalizeLocalPromptFields(body) {
+  const title = String(body?.title || '').trim();
+  const content = String(body?.content || '').trim();
+  if (!title) throw createHttpError(400, 'INVALID_PROMPT', '标题不能为空');
+  if (!content) throw createHttpError(400, 'INVALID_PROMPT', '正文不能为空');
+  const type = Number(body?.type);
+  if (type !== 1 && type !== 2) {
+    throw createHttpError(400, 'INVALID_PROMPT_TYPE', 'type 只能是 1（文生图）或 2（图生图）');
+  }
+  return { title, content, type };
+}
+
+function decodeLocalPromptId(raw) {
+  try {
+    return decodeURIComponent(String(raw || ''));
+  } catch {
+    throw createHttpError(400, 'INVALID_PROMPT_ID', '无效的模板 id');
+  }
+}
+
 async function handleApi(req, res, pathname, searchParams) {
   try {
     const apiPathname = pathname.replace(/\/+$/, '');
@@ -2124,19 +2238,80 @@ async function handleApi(req, res, pathname, searchParams) {
       return true;
     }
 
-    if (req.method === 'GET' && apiPathname === '/api/nova/prompts') {
-      const promptsPath = path.join(__dirname, 'prompts.json');
-      try {
-        if (!fs.existsSync(promptsPath)) {
-          sendJson(res, 200, []);
+    if (apiPathname === '/api/nova/prompts') {
+      if (req.method === 'GET') {
+        sendJson(res, 200, loadLocalPromptRecords().map(item => toPublicLocalPrompt(item)));
+        return true;
+      }
+      if (req.method === 'POST') {
+        const body = await readJsonBody(req);
+        assertPromptGalleryWriteAccess(req, body);
+        assertLocalPromptSourceWritable(body);
+        const fields = normalizeLocalPromptFields(body);
+        const records = loadLocalPromptRecords();
+        const created = {
+          id: `local-${randomUUID()}`,
+          title: fields.title,
+          content: fields.content,
+          type: fields.type,
+        };
+        records.unshift(created);
+        writeLocalPromptRecords(records);
+        sendJson(res, 201, toPublicLocalPrompt(created));
+        return true;
+      }
+      sendJson(res, 405, { error: 'Method Not Allowed' });
+      return true;
+    }
+
+    const promptItemMatch = apiPathname.match(/^\/api\/nova\/prompts\/([^/]+)$/);
+    if (promptItemMatch) {
+      const promptId = decodeLocalPromptId(promptItemMatch[1]);
+      if (req.method === 'GET') {
+        const records = loadLocalPromptRecords();
+        const index = findLocalPromptIndex(records, promptId);
+        if (index < 0) {
+          sendJson(res, 404, { error: '本站模板不存在' });
           return true;
         }
-        const raw = fs.readFileSync(promptsPath, 'utf8');
-        const data = JSON.parse(raw);
-        sendJson(res, 200, Array.isArray(data) ? data : []);
-      } catch {
-        sendJson(res, 200, []);
+        sendJson(res, 200, toPublicLocalPrompt(records[index]));
+        return true;
       }
+      if (req.method === 'PUT' || req.method === 'PATCH') {
+        const body = await readJsonBody(req);
+        assertPromptGalleryWriteAccess(req, body);
+        assertLocalPromptSourceWritable(body);
+        const fields = normalizeLocalPromptFields(body);
+        const records = loadLocalPromptRecords();
+        const index = findLocalPromptIndex(records, promptId);
+        if (index < 0) {
+          throw createHttpError(404, 'PROMPT_NOT_FOUND', '本站模板不存在');
+        }
+        records[index] = {
+          id: stableLocalPromptId(records[index]),
+          title: fields.title,
+          content: fields.content,
+          type: fields.type,
+        };
+        writeLocalPromptRecords(records);
+        sendJson(res, 200, toPublicLocalPrompt(records[index]));
+        return true;
+      }
+      if (req.method === 'DELETE') {
+        const body = await readJsonBody(req);
+        assertPromptGalleryWriteAccess(req, body);
+        assertLocalPromptSourceWritable(body);
+        const records = loadLocalPromptRecords();
+        const index = findLocalPromptIndex(records, promptId);
+        if (index < 0) {
+          throw createHttpError(404, 'PROMPT_NOT_FOUND', '本站模板不存在');
+        }
+        records.splice(index, 1);
+        writeLocalPromptRecords(records);
+        sendJson(res, 200, { ok: true, id: promptId });
+        return true;
+      }
+      sendJson(res, 405, { error: 'Method Not Allowed' });
       return true;
     }
 
@@ -2259,7 +2434,7 @@ async function handleApi(req, res, pathname, searchParams) {
         }
 
         const rawBody = await readRawBody(req, MAX_IMAGE_EDIT_BODY_BYTES);
-        const normalizedBaseUrl = normalizeProtocolBaseUrl('openai', String(baseUrl));
+        const normalizedBaseUrl = resolveParentGatewayBaseUrl(normalizeProtocolBaseUrl('openai', String(baseUrl)));
 
         const upstream = await fetchWithTimeout(`${normalizedBaseUrl}/v1/images/edits`, {
           method: 'POST',
@@ -2302,7 +2477,7 @@ async function handleApi(req, res, pathname, searchParams) {
           return true;
         }
 
-        const normalizedBaseUrl = normalizeProtocolBaseUrl(protocol, baseUrl);
+        const normalizedBaseUrl = resolveParentGatewayBaseUrl(normalizeProtocolBaseUrl(protocol, baseUrl));
         let targetUrl;
         const authHeaders = { 'Content-Type': 'application/json' };
 
@@ -2393,7 +2568,7 @@ async function handleApi(req, res, pathname, searchParams) {
           return true;
         }
 
-        const normalizedBaseUrl = normalizeProtocolBaseUrl(protocol, baseUrl);
+        const normalizedBaseUrl = resolveParentGatewayBaseUrl(normalizeProtocolBaseUrl(protocol, baseUrl));
         let modelsUrl = `${normalizedBaseUrl}/v1/models`;
         const headers = {};
 
