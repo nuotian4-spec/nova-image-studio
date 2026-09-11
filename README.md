@@ -30,6 +30,14 @@ Nova Studio is an AI video/image generation workbench for individuals and small 
 
 > Current version: **v3.3.0**
 
+## Sub2API 嵌入模式
+
+本仓库是 [Nova Studio](https://github.com/tianjiangqiji/nova-image-studio) **v3.3.0 的 AGPL-3.0 衍生**，供 Sub2API 父页同源 iframe 使用。**不要把本源码 merge 进 Sub2API 主仓。**
+
+父页以 iframe 打开 `/_nova/?embedded=1`，并用 `postMessage`（`sub2api:nova-studio-config` / `sub2api:nova-studio-revoke`）注入站点 API Key。嵌入模式下不登录第二套账号、不填 OpenAI Key、隐藏视频工作台、密钥不写入 localStorage。
+
+静态资源 `basePath`/`assetPrefix` 为 `/_nova`；API 仍为站点根 `/api/nova/*`。协议映射与部署说明见 [README.zh-CN.md](README.zh-CN.md)。许可证仍为 [AGPL-3.0](LICENSE)。
+
 ## 📚 Documentation
 
 Everything lives under [`docs/`](docs/). The plugin protocol docs are written in Chinese.

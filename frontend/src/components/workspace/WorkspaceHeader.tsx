@@ -16,6 +16,7 @@ import {
 import { runImageAction, type ImageActionPayload } from '@/lib/image-actions';
 
 import { BA_RANDOM_URL, BING_WALLPAPER_URL } from '@/lib/constants';
+import { withBasePath } from '@/lib/embed/public-path';
 
 function getDistance(t1: { clientX: number; clientY: number }, t2: { clientX: number; clientY: number }) {
   return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
@@ -136,7 +137,7 @@ export const WorkspaceHeader = forwardRef<WorkspaceHeaderRef, WorkspaceHeaderPro
             aria-label="Nova Studio logo"
           >
             <img
-              src="/favicon.png"
+              src={withBasePath('/favicon.png')}
               alt="Nova Studio logo"
               className="h-8 w-8 flex-shrink-0 rounded-lg object-cover ring-1 ring-border/60 sm:h-11 sm:w-11 sm:rounded-xl"
             />

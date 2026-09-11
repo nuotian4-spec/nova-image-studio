@@ -48,10 +48,15 @@ import {
 } from '@/lib/workspace-task-service';
 import { cn } from '@/lib/utils';
 import { BA_RANDOM_URL, BING_WALLPAPER_URL } from '@/lib/constants';
+import { EmbedCapabilityNotice } from '@/components/workspace/EmbedCapabilityNotice';
+import { useEmbedRuntime } from '@/hooks/useEmbedRuntime';
+import { withBasePath } from '@/lib/embed/public-path';
+import { isEmbeddedMode } from '@/lib/embed/mode';
 
 export function WorkspaceShell() {
   const queueStatus = useQueueStatus();
   const { wideMode, toggleWideMode } = useWideMode();
+  const embed = useEmbedRuntime();
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 设置弹层打开时停在哪一页。插件凭据的提示条要直达插件页，其余入口都回到模型配置。 */
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('models');
@@ -61,7 +66,9 @@ export function WorkspaceShell() {
   }, []);
   const [missingApiKeyDialogOpen, setMissingApiKeyDialogOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'image-generation' | 'video-generation' | 'agent' | 'canvas' | 'image-to-slice' | 'assets' | 'reverse-prompt' | 'gif' | 'prompt-gallery'>('agent');
+  const [activeTab, setActiveTab] = useState<'image-generation' | 'video-generation' | 'agent' | 'canvas' | 'image-to-slice' | 'assets' | 'reverse-prompt' | 'gif' | 'prompt-gallery'>(
+    isEmbeddedMode() ? 'image-generation' : 'agent',
+  );
   const [videoInitialJob, setVideoInitialJob] = useState<PluginJob | null>(null);
   const [generationHistoryFilter, setGenerationHistoryFilter] = useState<GenerationHistoryFilter>('all');
   const [generationClearScope, setGenerationClearScope] = useState<HistoryClearScope | null>(null);
@@ -91,6 +98,12 @@ export function WorkspaceShell() {
     setReferenceDraft({ id: ++referenceDraftIdRef.current, refImages: detail.refImages, prompt: detail.prompt });
     setActiveTab('image-generation');
   }), [workspace]);
+
+  useEffect(() => {
+    if (embed.hideVideo && activeTab === 'video-generation') {
+      setActiveTab('image-generation');
+    }
+  }, [activeTab, embed.hideVideo]);
 
   const handleImageDraftConsumed = useCallback(() => {
     workspace.setRetryData(null);
@@ -268,7 +281,7 @@ export function WorkspaceShell() {
                   aria-label="Nova Studio logo"
                 >
                   <img
-                    src="/favicon.png"
+                    src={withBasePath('/favicon.png')}
                     alt="Nova Studio"
                     className="h-8 w-8 shrink-0 rounded-lg object-cover ring-1 ring-border/60"
                   />
@@ -279,7 +292,7 @@ export function WorkspaceShell() {
                 </button>
               )}
               <div className={cn(wideMode ? 'flex flex-col py-4 flex-1' : 'flex flex-col py-1')}>
-                <WorkspaceModeTabs wideMode={wideMode} showPromptGallery={promptGallery.showPromptGallery} />
+                <WorkspaceModeTabs wideMode={wideMode} showPromptGallery={promptGallery.showPromptGallery} hideVideo={embed.hideVideo} />
               </div>
 
               {wideMode && (
@@ -360,11 +373,13 @@ export function WorkspaceShell() {
               <TabsContent value="image-generation" keepMounted className={cn(wideMode ? 'space-y-6 xl:flex xl:min-h-0 xl:space-y-0' : 'space-y-3')}>
                 <div className={cn(wideMode ? 'grid items-start gap-5 xl:h-full xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(460px,0.95fr)_minmax(0,1.35fr)] xl:items-stretch' : 'space-y-3')}>
                   <div className={cn(wideMode && 'xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pr-1')}>
+                    {embed.enabled && embed.waitingForConfig && <div className="mb-3"><EmbedCapabilityNotice kind="waiting" /></div>}
+                    {embed.enabled && !embed.waitingForConfig && !workspace.hasImageKey && <div className="mb-3"><EmbedCapabilityNotice kind="image" /></div>}
                     <ImageGenerationWorkbench
                       wideMode={wideMode}
                       onSubmitText={data => void submitTextToImage(data, submitActions, handleSubmitError)}
                       onSubmitImage={data => void submitImageToImage(data, submitActions, handleSubmitError)}
-                      disabled={!workspace.hasApiKey}
+                      disabled={embed.enabled ? !workspace.hasImageKey : !workspace.hasApiKey}
                       onConfigureApiKey={() => openSettings()}
                       onDraftConsumed={handleImageDraftConsumed}
                       initialData={generationInitialData}
@@ -402,13 +417,16 @@ export function WorkspaceShell() {
                 keepMounted
                 className={cn('flex-1 flex flex-col min-h-0', wideMode && 'xl:flex xl:min-h-0 xl:flex-1 xl:flex-col')}
               >
+                {embed.enabled && embed.waitingForConfig && <div className="mb-3"><EmbedCapabilityNotice kind="waiting" /></div>}
+                {embed.enabled && !embed.waitingForConfig && !workspace.hasTextKey && <div className="mb-3"><EmbedCapabilityNotice kind="text" /></div>}
                 <AgentChatWorkspace
                   wideMode={wideMode}
-                  disabled={!workspace.hasApiKey}
+                  disabled={embed.enabled ? !workspace.hasTextKey : !workspace.hasApiKey}
                   onConfigureApiKey={() => openSettings()}
                 />
               </TabsContent>
 
+              {!embed.hideVideo && (
               <TabsContent value="video-generation" keepMounted className={cn(wideMode ? 'space-y-6 xl:flex xl:min-h-0 xl:space-y-0' : 'space-y-3')}>
                 <div className={cn(wideMode ? 'grid items-start gap-5 xl:h-full xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(460px,0.95fr)_minmax(0,1.35fr)] xl:items-stretch' : 'space-y-3')}>
                   <div className={cn(wideMode && 'xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pr-1')}>
@@ -430,8 +448,10 @@ export function WorkspaceShell() {
                   />
                 </div>
               </TabsContent>
+              )}
 
               <TabsContent value="canvas" keepMounted className={cn('min-h-0', wideMode ? 'xl:flex xl:min-h-0 xl:flex-1 xl:flex-col' : 'space-y-6')}>
+                {embed.enabled && !workspace.hasImageKey && <div className="mb-3"><EmbedCapabilityNotice kind="image" /></div>}
                 <CanvasWorkspace
                   wideMode={wideMode}
                   onConfigureApiKey={() => openSettings()}
@@ -442,6 +462,7 @@ export function WorkspaceShell() {
               </TabsContent>
 
               <TabsContent value="image-to-slice" keepMounted className={cn(wideMode ? 'space-y-6 xl:min-h-0 xl:flex xl:flex-col' : 'space-y-6')}>
+                {embed.enabled && !workspace.hasTextKey && <div className="mb-3"><EmbedCapabilityNotice kind="text" /></div>}
                 <SliceWorkspace
                   wideMode={wideMode}
                   onConfigureApiKey={() => openSettings()}
@@ -455,17 +476,19 @@ export function WorkspaceShell() {
               </TabsContent>
 
               <TabsContent value="reverse-prompt" keepMounted className={cn(wideMode ? 'space-y-6 xl:min-h-0 xl:flex xl:flex-col' : 'space-y-6')}>
+                {embed.enabled && !workspace.hasTextKey && <div className="mb-3"><EmbedCapabilityNotice kind="text" /></div>}
                 <ReversePromptForm
                   wideMode={wideMode}
-                  disabled={!workspace.hasApiKey}
+                  disabled={embed.enabled ? !workspace.hasTextKey : !workspace.hasApiKey}
                   onConfigureApiKey={() => openSettings()}
                 />
               </TabsContent>
 
               <TabsContent value="gif" keepMounted className={cn(wideMode ? 'space-y-6 xl:min-h-0 xl:flex xl:flex-col' : 'space-y-6')}>
+                {embed.enabled && !workspace.hasImageKey && <div className="mb-3"><EmbedCapabilityNotice kind="image" /></div>}
                 <GifGenerationWorkspace
                   wideMode={wideMode}
-                  hasApiKey={workspace.hasApiKey}
+                  hasApiKey={embed.enabled ? workspace.hasImageKey : workspace.hasApiKey}
                   onConfigureApiKey={() => openSettings()}
                   onError={message => showToast(message, 'error')}
                   showToast={showToast}

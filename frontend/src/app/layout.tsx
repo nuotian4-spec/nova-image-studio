@@ -3,6 +3,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Script from "next/script";
 import { ServiceWorkerManager } from "@/components/ServiceWorkerManager";
+import { EmbedBridge } from "@/components/EmbedBridge";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -38,6 +39,19 @@ export default function RootLayout({
             __html: `
               (function() {
                 try {
+                  var params = new URLSearchParams(window.location.search);
+                  if (params.get('embedded') === '1' && window.parent && window.parent !== window) {
+                    var parentRoot = window.parent.document.documentElement;
+                    var parentTheme = parentRoot.getAttribute('data-theme') || parentRoot.getAttribute('data-dark') || '';
+                    if (parentRoot.classList.contains('dark') || parentTheme === 'dark') {
+                      document.documentElement.setAttribute('data-theme', 'dark');
+                      return;
+                    }
+                    if (parentRoot.classList.contains('light') || parentTheme === 'light') {
+                      document.documentElement.setAttribute('data-theme', 'light');
+                      return;
+                    }
+                  }
                   const theme = window.localStorage.getItem('theme');
                   if (theme === 'dark' || theme === 'light') {
                     document.documentElement.setAttribute('data-theme', theme);
@@ -47,6 +61,30 @@ export default function RootLayout({
                 } catch {
                   document.documentElement.removeAttribute('data-theme');
                 }
+              })();
+            `,
+          }}
+        />
+        <Script
+          id="embed-queue-init"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                try {
+                  window.__novaEmbedQueue = window.__novaEmbedQueue || [];
+                  window.addEventListener('message', function(ev) {
+                    if (!ev || ev.origin !== window.location.origin) return;
+                    if (!ev.data || typeof ev.data !== 'object') return;
+                    var t = ev.data.type;
+                    if (t !== 'sub2api:nova-studio-config' && t !== 'sub2api:nova-studio-revoke') return;
+                    if (typeof window.__novaEmbedIngest === 'function') {
+                      window.__novaEmbedIngest(ev.data);
+                    } else {
+                      window.__novaEmbedQueue.push(ev.data);
+                    }
+                  });
+                } catch {}
               })();
             `,
           }}
@@ -80,6 +118,7 @@ export default function RootLayout({
         </div>
         <TooltipProvider>
           <ServiceWorkerManager />
+          <EmbedBridge />
           <ErrorBoundary>
             <main>
               {children}

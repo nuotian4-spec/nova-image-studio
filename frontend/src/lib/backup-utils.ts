@@ -2,6 +2,8 @@
 
 import { zip, unzip, zipSync, unzipSync, strToU8, type Unzipped } from 'fflate';
 import localforage from 'localforage';
+import { isEmbeddedMode } from '@/lib/embed/mode';
+import { stripApiKeysFromRegistry } from '@/lib/embed/protocol-map';
 
 export interface BackupProgress {
     percent: number;
@@ -224,7 +226,15 @@ function exportLocalStorage(): Record<string, string> {
         try {
             const value = localStorage.getItem(key);
             if (value !== null) {
-                data[key] = value;
+                if (key === 'nova-model-registry' && isEmbeddedMode()) {
+                    try {
+                        data[key] = JSON.stringify(stripApiKeysFromRegistry(JSON.parse(value)));
+                    } catch {
+                        data[key] = value;
+                    }
+                } else {
+                    data[key] = value;
+                }
             }
         } catch {
             // skip failed localStorage export
@@ -495,6 +505,9 @@ function importLocalStorage(data: unknown): void {
         if (!allowedKeySet.has(key)) continue;
         // 只允许字符串值
         if (typeof value !== 'string') continue;
+
+        // 嵌入模式的模型列表以父站 postMessage 为准，备份不得回写密钥。
+        if (key === 'nova-model-registry' && isEmbeddedMode()) continue;
 
         // 模型注册表含各模型的 API Key 与端点，结构损坏时整条跳过，避免覆盖成坏数据
         if (key === 'nova-model-registry') {

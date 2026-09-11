@@ -11,7 +11,7 @@
     "build": "cd frontend && npm run build",
     "start": "cd backend && node server.js",
     "lint": "cd frontend && npm run lint && cd ../backend && npm run lint",
-    "test": "cd frontend && npm run test",
+    "test": "cd frontend && npm run test:run",
     "test:ui": "cd frontend && npm run test:ui",
     "test:run": "cd frontend && npm run test:run",
     "go": "node scripts/pack.js",

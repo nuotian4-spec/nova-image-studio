@@ -564,6 +564,16 @@ function pipeFileToResponse(res, filePath, statusCode, headers) {
   stream.pipe(res);
 }
 
+function staticPathVariants(pathname) {
+  const paths = [pathname || '/'];
+  if (pathname === '/_nova' || pathname === '/_nova/') {
+    paths.push('/');
+  } else if (pathname && pathname.startsWith('/_nova/')) {
+    paths.push(pathname.slice('/_nova'.length) || '/');
+  }
+  return paths;
+}
+
 function serveStatic(req, res, pathname) {
   if (!fs.existsSync(STATIC_DIR)) return false;
   let decodedPath;
@@ -573,16 +583,19 @@ function serveStatic(req, res, pathname) {
     decodedPath = (pathname || '/').replace(/%(?![0-9a-fA-F]{2})/g, '');
   }
   // 路径遍历防护：规范化后检测 .. 路径段，提前拒绝
-  const normalizedPath = path.normalize(decodedPath);
-  if (normalizedPath.includes('..')) return false;
+  if (path.normalize(decodedPath).includes('..')) return false;
 
   const candidates = [];
-  if (normalizedPath.endsWith('/') || normalizedPath.endsWith(path.sep)) {
-    candidates.push(path.join(STATIC_DIR, normalizedPath, 'index.html'));
-  } else {
-    candidates.push(path.join(STATIC_DIR, normalizedPath));
-    candidates.push(path.join(STATIC_DIR, `${normalizedPath}.html`));
-    candidates.push(path.join(STATIC_DIR, normalizedPath, 'index.html'));
+  for (const variant of staticPathVariants(decodedPath)) {
+    const normalizedPath = path.normalize(variant);
+    if (normalizedPath.includes('..')) continue;
+    if (normalizedPath.endsWith('/') || normalizedPath.endsWith(path.sep)) {
+      candidates.push(path.join(STATIC_DIR, normalizedPath, 'index.html'));
+    } else {
+      candidates.push(path.join(STATIC_DIR, normalizedPath));
+      candidates.push(path.join(STATIC_DIR, `${normalizedPath}.html`));
+      candidates.push(path.join(STATIC_DIR, normalizedPath, 'index.html'));
+    }
   }
 
   const staticDirResolved = path.resolve(STATIC_DIR) + path.sep;

@@ -29,6 +29,59 @@ Nova Studio 是一个面向个人/团队的 AI 视频/图像生成工作台。�
 
 > 当前版本：**v3.3.0**
 
+## Sub2API 嵌入模式
+
+本仓库是 [Nova Studio](https://github.com/tianjiangqiji/nova-image-studio) **v3.3.0 的 AGPL-3.0 衍生**，供 Sub2API 父页同源 iframe 使用。**不要把本源码 merge 进 Sub2API 主仓。**
+
+父页路由 `/image-studio` 以 iframe 打开 `/_nova/?embedded=1`，并用 `postMessage` 注入用户的站点 API Key（生图一把 + 文本一把）。嵌入模式下：
+
+- 不登录第二套账号，不让用户填写 OpenAI Key
+- 隐藏视频工作台（`video-generation` / PluginWorkbench）
+- 锁死设置里的 BYOK：手动填 Base URL/API Key、备份导出 Key
+- **密钥只在内存**，写入 `localStorage` 前会把 `apiKey` 置空
+- 缺生图 Key 禁用生图工作台；缺文本 Key 禁用 Agent / 反推 / 切图 AI / 网页复刻，并给出中文提示
+
+### 父页契约（字符串勿改）
+
+```ts
+// type: 'sub2api:nova-studio-config'
+{
+  sessionId, revision,
+  baseUrl: 'https://<parent>/',  // 站点根，不含 /api/v1
+  uiMode: 'embedded',
+  hideVideo: true,
+  hideByokSettings: true,
+  image?: { apiKey, keyId, model, protocol, models: [{model, protocol}] },
+  text?: { apiKey, keyId, model, protocol, models: [{model, protocol}] }
+}
+// 缺密钥时：type: 'sub2api:nova-studio-revoke'
+```
+
+`protocol` 映射到 Nova 内部 registry，再打到父站网关（**不要直连** api.openai.com / api.x.ai）：
+
+| Sub2API protocol | Nova protocol | 相对 baseUrl 的请求路径 |
+| --- | --- | --- |
+| `openai_images` | `openai` | `v1/images/generations` · `v1/images/edits` |
+| `grok_images` | `grok` | `v1/images/generations` · `v1/images/edits` |
+| `gemini_generate_content` | `google` | `v1beta/models/{model}:generateContent` |
+| `openai_chat_completions` | `openai-chat-completions` | `v1/chat/completions` |
+| `openai_responses` | `openai-responses` | `v1/responses` |
+| `anthropic_messages` | `anthropic-messages` | `v1/messages` |
+| `google_gemini` | `google-gemini` | `v1beta/models/{model}:generateContent` |
+
+### 反向代理
+
+生产静态资源使用 Next `basePath` / `assetPrefix` = `/_nova`，避免与父站 Vue 的 `/_next` 撞车。API **仍走站点根**：
+
+| 父站路径 | 转到 |
+| --- | --- |
+| `/_nova/` | 本进程静态资源（`frontend/out`，保留 `/_nova` 前缀即可） |
+| `/api/nova/*` | 本进程 Node 后端。**不要**写成 `/_nova/api/nova/*` |
+
+若网关剥掉了 `/_nova` 前缀，后端仍会同时尝试带前缀和不带前缀的静态路径。
+
+许可证仍为 [AGPL-3.0](LICENSE)。衍生修改必须开源。
+
 ## 📚 文档
 
 所有文档都在 [`docs/`](docs/) 目录下。

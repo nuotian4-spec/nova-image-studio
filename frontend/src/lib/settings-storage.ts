@@ -25,9 +25,16 @@ export function getApiKeyFromStorage(): string {
   return getStoredApiKey();
 }
 
+export function hasImageApiKey(): boolean {
+  return getCompleteImageModels(loadRegistry()).length > 0;
+}
+
+export function hasTextApiKey(): boolean {
+  return getCompleteTextModels(loadRegistry()).length > 0;
+}
+
 export function hasAnyApiKey(): boolean {
-  const registry = loadRegistry();
-  return getCompleteImageModels(registry).length > 0 && getCompleteTextModels(registry).length > 0;
+  return hasImageApiKey() && hasTextApiKey();
 }
 
 export function loadJsonFromStorage<T>(key: string): Partial<T> {

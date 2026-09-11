@@ -9,6 +9,16 @@ import { useEffect } from 'react';
 export function ServiceWorkerManager() {
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
+    try {
+      if (new URLSearchParams(window.location.search).get('embedded') === '1') {
+        void navigator.serviceWorker.getRegistrations().then((regs) => {
+          for (const reg of regs) void reg.unregister();
+        });
+        return;
+      }
+    } catch {
+      // ignore
+    }
 
     const handleControllerChange = () => {
       // 新 SW 接管后立即刷新，确保页面使用最新的 JS 包

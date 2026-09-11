@@ -4,17 +4,12 @@ import { useRef } from 'react';
 import { Bot, Film, Frame, Images, LibraryBig, ScanSearch, Scissors, Sparkles, Video } from 'lucide-react';
 import { TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-interface WorkspaceModeTabsProps {
-  wideMode?: boolean;
-  showPromptGallery?: boolean;
-}
-
 const horizontalTriggerClass =
   'group h-full min-h-0 min-w-0 gap-1 overflow-hidden whitespace-nowrap rounded-xl px-2 py-2 text-xs max-sm:w-14 max-sm:shrink-0 max-sm:flex-none max-sm:data-active:w-auto max-sm:data-active:min-w-[88px] sm:h-[calc(100%-1px)] sm:gap-2 sm:px-3 sm:py-2 sm:text-sm';
 
 const labelClass = 'max-sm:hidden max-sm:group-data-active:inline';
 
-const tabs = [
+export const WORKSPACE_MODE_TABS = [
   { value: 'agent', icon: Bot, label: 'Agent' },
   { value: 'image-generation', icon: Sparkles, label: '生图工作台' },
   // 视频能力全部来自插件包；没装插件时这个 tab 仍在，里面给出安装引导
@@ -28,9 +23,29 @@ const tabs = [
 
 const galleryTab = { value: 'prompt-gallery', icon: LibraryBig, label: '提示词广场' } as const;
 
-export function WorkspaceModeTabs({ wideMode = false, showPromptGallery = false }: WorkspaceModeTabsProps) {
-  const gridCols = showPromptGallery ? 'sm:grid-cols-9' : 'sm:grid-cols-8';
-  const allTabs = showPromptGallery ? [...tabs, galleryTab] : tabs;
+export function getWorkspaceModeTabs(options: { hideVideo?: boolean; showPromptGallery?: boolean } = {}) {
+  const base = options.hideVideo
+    ? WORKSPACE_MODE_TABS.filter((tab) => tab.value !== 'video-generation')
+    : [...WORKSPACE_MODE_TABS];
+  return options.showPromptGallery ? [...base, galleryTab] : base;
+}
+
+function gridColsClass(count: number): string {
+  if (count >= 9) return 'sm:grid-cols-9';
+  if (count === 8) return 'sm:grid-cols-8';
+  if (count === 7) return 'sm:grid-cols-7';
+  return 'sm:grid-cols-6';
+}
+
+interface WorkspaceModeTabsProps {
+  wideMode?: boolean;
+  showPromptGallery?: boolean;
+  hideVideo?: boolean;
+}
+
+export function WorkspaceModeTabs({ wideMode = false, showPromptGallery = false, hideVideo = false }: WorkspaceModeTabsProps) {
+  const allTabs = getWorkspaceModeTabs({ hideVideo, showPromptGallery });
+  const gridCols = gridColsClass(allTabs.length);
   const dragStateRef = useRef({
     pointerId: -1,
     startX: 0,

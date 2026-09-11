@@ -61,6 +61,7 @@ import { syncDynamicModelExports } from '@/lib/gemini-config';
 import { exportAllData, importAllData, downloadBlob, generateBackupFilename, type BackupProgress as BackupProgressType } from '@/lib/backup-utils';
 import { checkModelsAvailability, type ModelStatus } from '@/lib/ccode-task-client';
 import { hasAnyApiKey } from '@/lib/settings-storage';
+import { useEmbedRuntime } from '@/hooks/useEmbedRuntime';
 import { BA_RANDOM_URL, BING_WALLPAPER_URL } from '@/lib/constants';
 import { PROMPT_DATA_SOURCES, getPromptSourceLabel } from '@/lib/prompt-gallery-data';
 
@@ -156,13 +157,18 @@ function normalizeDefaults(
 }
 
 export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'models' }: SettingsModalProps) {
+  const embed = useEmbedRuntime();
+  const lockByok = embed.hideByokSettings || embed.enabled;
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   // 每次打开都回到调用方指定的那一页：从「插件凭据未配置」的提示条点进来要直达插件页。
   // 用「渲染期按 prop 变化调整 state」而不是 effect，避免先渲染出模型页再跳一帧。
   const [wasOpen, setWasOpen] = useState(isOpen);
   if (isOpen !== wasOpen) {
     setWasOpen(isOpen);
-    if (isOpen) setTab(initialTab);
+    if (isOpen) {
+      const nextTab = lockByok && (initialTab === 'plugins' || initialTab === 'backup') ? 'models' : initialTab;
+      setTab(nextTab);
+    }
   }
 
   const [imageModels, setImageModels] = useState<ImageModelConfig[]>([]);
@@ -296,6 +302,10 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
   };
 
   const persistRegistry = () => {
+    if (lockByok) {
+      setError('嵌入模式下模型来自父站，不能手动保存 API Key。');
+      return;
+    }
     if (imageModels.length === 0) {
       setError('至少填写一个图片模型');
       return;
@@ -353,6 +363,10 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
   };
 
   const handleExport = async () => {
+    if (lockByok) {
+      setBackupError('嵌入模式禁止导出含密钥的备份。');
+      return;
+    }
     setIsBackupActive(true);
     setBackupError(null);
     setBackupSuccess(null);
@@ -421,7 +435,11 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
             <Settings className="w-5 h-5 text-muted-foreground" />
             <DialogTitle>设置</DialogTitle>
           </div>
-          <DialogDescription>按模型分别配置协议、URL 和 API Key。至少完成一个图片模型和一个文本模型后，外部功能才会解锁。</DialogDescription>
+          <DialogDescription>
+            {lockByok
+              ? '嵌入模式：当前模型来自父站。不会在此填写 OpenAI Key，也不会把密钥写入浏览器。'
+              : '按模型分别配置协议、URL 和 API Key。至少完成一个图片模型和一个文本模型后，外部功能才会解锁。'}
+          </DialogDescription>
         </DialogHeader>
 
         <Tabs value={tab} onValueChange={value => setTab(value as SettingsTab)} className="min-h-0 flex-1 gap-0">
@@ -430,14 +448,18 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
               <ImageIcon className="w-4 h-4" />
               模型配置
             </TabsTrigger>
+            {!lockByok && (
             <TabsTrigger value="plugins" className="gap-2 rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-transparent data-active:shadow-none px-4 py-3">
               <Package className="w-4 h-4" />
               插件
             </TabsTrigger>
+            )}
+            {!lockByok && (
             <TabsTrigger value="backup" className="gap-2 rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-transparent data-active:shadow-none px-4 py-3">
               <Database className="w-4 h-4" />
               备份
             </TabsTrigger>
+            )}
             <TabsTrigger value="about" className="gap-2 rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-transparent data-active:shadow-none px-4 py-3">
               <Info className="w-4 h-4" />
               关于
@@ -447,13 +469,19 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
           <TabsContent value="models" className="min-h-0 overflow-y-auto p-4 sm:p-6 mt-0 space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-1">
-                <p className="text-sm font-medium">模型级独立配置</p>
-                <p className="text-xs text-muted-foreground">每个模型单独记录协议、Base URL、API Key。外部只显示配置完整的模型。</p>
+                <p className="text-sm font-medium">{lockByok ? '当前模型来自父站' : '模型级独立配置'}</p>
+                <p className="text-xs text-muted-foreground">
+                  {lockByok
+                    ? `生图：${embed.imageLabels.join('、') || '未注入'}；文本：${embed.textLabels.join('、') || '未注入'}。密钥仅保存在内存，不会写入 localStorage。`
+                    : '每个模型单独记录协议、Base URL、API Key。外部只显示配置完整的模型。'}
+                </p>
               </div>
+              {!lockByok && (
               <Button onClick={persistRegistry} className="gap-2">
                 <Save className="w-4 h-4" />
                 保存设置
               </Button>
+              )}
             </div>
 
             {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
@@ -465,10 +493,12 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
                   <p className="font-medium">图片模型</p>
                   <p className="text-xs text-muted-foreground">无默认示范记录。请至少完成一个图片模型。</p>
                 </div>
+                {!lockByok && (
                 <Button variant="outline" size="sm" className="gap-2" onClick={handleAddImageModel}>
                   <Plus className="w-4 h-4" />
                   新增图片模型
                 </Button>
+                )}
               </div>
 
               <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
@@ -494,6 +524,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
                         value={selectedImageModel.builtinPreset}
                         onValueChange={(value) => handleUpdateImageModel(selectedImageModel.id, { builtinPreset: value as ImageModelConfig['builtinPreset'] })}
                         options={BUILTIN_IMAGE_PRESET_OPTIONS}
+                        disabled={lockByok}
                       />
                     </div>
                     <div className="space-y-2">
@@ -506,28 +537,31 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
                           { value: 'openai', label: 'OpenAI Images' },
                           { value: 'grok', label: 'Grok Images' },
                         ]}
+                        disabled={lockByok}
                       />
                     </div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">显示名称</label>
-                      <Input value={selectedImageModel.name} onChange={(event) => handleUpdateImageModel(selectedImageModel.id, { name: event.target.value })} />
+                      <Input value={selectedImageModel.name} onChange={(event) => handleUpdateImageModel(selectedImageModel.id, { name: event.target.value })} disabled={lockByok} />
                     </div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">模型 ID</label>
-                      <Input value={selectedImageModel.modelId} onChange={(event) => handleUpdateImageModel(selectedImageModel.id, { modelId: event.target.value })} />
+                      <Input value={selectedImageModel.modelId} onChange={(event) => handleUpdateImageModel(selectedImageModel.id, { modelId: event.target.value })} disabled={lockByok} />
                     </div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">Base URL</label>
-                      <Input value={selectedImageModel.baseUrl} onChange={(event) => handleUpdateImageModel(selectedImageModel.id, { baseUrl: event.target.value })} />
+                      <Input value={selectedImageModel.baseUrl} onChange={(event) => handleUpdateImageModel(selectedImageModel.id, { baseUrl: event.target.value })} disabled={lockByok} />
                     </div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">API Key</label>
                       <div className="relative">
                         <Input
                           type={showImageApiKey ? "text" : "password"}
-                          value={selectedImageModel.apiKey}
+                          value={lockByok ? '' : selectedImageModel.apiKey}
+                          placeholder={lockByok ? '已由父站注入（不落盘）' : ''}
                           onChange={(event) => handleUpdateImageModel(selectedImageModel.id, { apiKey: event.target.value })}
                           className="pr-8"
+                          disabled={lockByok}
                         />
                         <button
                           type="button"
@@ -573,12 +607,14 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
                         />
                       </div>
                     )}
+                    {!lockByok && (
                     <div className="md:col-span-2 flex justify-end">
                       <Button variant="outline" size="sm" className="gap-2 text-destructive hover:text-destructive" onClick={() => handleDeleteImageModel(selectedImageModel.id)}>
                         <Trash2 className="w-4 h-4" />
                         删除模型
                       </Button>
                     </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -590,10 +626,12 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
                   <p className="font-medium">文本模型</p>
                   <p className="text-xs text-muted-foreground">无默认示范记录。请至少完成一个文本模型。</p>
                 </div>
+                {!lockByok && (
                 <Button variant="outline" size="sm" className="gap-2" onClick={handleAddTextModel}>
                   <Plus className="w-4 h-4" />
                   新增文本模型
                 </Button>
+                )}
               </div>
 
               <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
@@ -628,28 +666,31 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
                           { value: 'anthropic-messages', label: getTextProviderLabel('anthropic-messages') },
                           { value: 'google-gemini', label: getTextProviderLabel('google-gemini') },
                         ]}
+                        disabled={lockByok}
                       />
                     </div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">显示名称</label>
-                      <Input value={selectedTextModel.name} onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { name: event.target.value })} />
+                      <Input value={selectedTextModel.name} onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { name: event.target.value })} disabled={lockByok} />
                     </div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">模型 ID</label>
-                      <Input value={selectedTextModel.modelId} onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { modelId: event.target.value })} />
+                      <Input value={selectedTextModel.modelId} onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { modelId: event.target.value })} disabled={lockByok} />
                     </div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">Base URL</label>
-                      <Input value={selectedTextModel.baseUrl} onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { baseUrl: event.target.value })} />
+                      <Input value={selectedTextModel.baseUrl} onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { baseUrl: event.target.value })} disabled={lockByok} />
                     </div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">API Key</label>
                       <div className="relative">
                         <Input
                           type={showTextApiKey ? "text" : "password"}
-                          value={selectedTextModel.apiKey}
+                          value={lockByok ? '' : selectedTextModel.apiKey}
+                          placeholder={lockByok ? '已由父站注入（不落盘）' : ''}
                           onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { apiKey: event.target.value })}
                           className="pr-8"
+                          disabled={lockByok}
                         />
                         <button
                           type="button"
@@ -665,12 +706,14 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
                       <label className="text-xs text-muted-foreground">协议描述</label>
                       <Input value={selectedTextModel.note || ''} onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { note: event.target.value })} />
                     </div>
+                    {!lockByok && (
                     <div className="md:col-span-2 flex justify-end">
                       <Button variant="outline" size="sm" className="gap-2 text-destructive hover:text-destructive" onClick={() => handleDeleteTextModel(selectedTextModel.id)}>
                         <Trash2 className="w-4 h-4" />
                         删除模型
                       </Button>
                     </div>
+                    )}
                   </div>
                 )}
               </div>

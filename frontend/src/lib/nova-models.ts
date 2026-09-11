@@ -1,6 +1,12 @@
 'use client';
 
 import {
+  getEmbeddedMemoryRegistry,
+  isEmbeddedMode,
+  setEmbeddedMemoryRegistry,
+} from '@/lib/embed/mode';
+import { stripApiKeysFromRegistry } from '@/lib/embed/protocol-map';
+import {
   getTextProviderDescription,
   isTextProviderProtocol,
   type TextProviderProtocol,
@@ -377,8 +383,25 @@ function getInitialRegistry(): NovaModelRegistry {
   };
 }
 
+function normalizeRegistry(registry: Partial<NovaModelRegistry> | NovaModelRegistry): NovaModelRegistry {
+  const imageModels = ensureImageModels(registry.imageModels);
+  const textModels = ensureTextModels(registry.textModels);
+  return {
+    imageModels,
+    textModels,
+    defaults: ensureDefaults(registry.defaults, imageModels, textModels),
+  };
+}
+
 export function loadRegistry(): NovaModelRegistry {
   if (typeof window === 'undefined') {
+    return getInitialRegistry();
+  }
+
+  if (isEmbeddedMode()) {
+    const memory = getEmbeddedMemoryRegistry();
+    if (memory) return normalizeRegistry(memory);
+    // 嵌入模式不以 localStorage 里的 BYOK 密钥为准，避免多租户串 key。
     return getInitialRegistry();
   }
 
@@ -388,22 +411,19 @@ export function loadRegistry(): NovaModelRegistry {
   }
 
   const parsed = JSON.parse(raw) as Partial<NovaModelRegistry>;
-  const imageModels = ensureImageModels(parsed.imageModels);
-  const textModels = ensureTextModels(parsed.textModels);
-  const defaults = ensureDefaults(parsed.defaults, imageModels, textModels);
-  return { imageModels, textModels, defaults };
+  return normalizeRegistry(parsed);
 }
 
 export function saveRegistry(registry: NovaModelRegistry): void {
   if (typeof window === 'undefined') return;
 
-  const imageModels = ensureImageModels(registry.imageModels);
-  const textModels = ensureTextModels(registry.textModels);
-  const normalized: NovaModelRegistry = {
-    imageModels,
-    textModels,
-    defaults: ensureDefaults(registry.defaults, imageModels, textModels),
-  };
+  const normalized = normalizeRegistry(registry);
+
+  if (isEmbeddedMode()) {
+    setEmbeddedMemoryRegistry(normalized);
+    localStorage.setItem(REGISTRY_KEY, JSON.stringify(stripApiKeysFromRegistry(normalized)));
+    return;
+  }
 
   localStorage.setItem(REGISTRY_KEY, JSON.stringify(normalized));
 }

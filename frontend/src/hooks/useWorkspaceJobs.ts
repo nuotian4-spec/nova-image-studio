@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { hasAnyApiKey } from '@/lib/settings-storage';
+import { hasAnyApiKey, hasImageApiKey, hasTextApiKey } from '@/lib/settings-storage';
 import {
   deleteImage,
   loadJobs,
@@ -30,6 +30,8 @@ function loadInitialJobs(): StoredJob[] {
 
 export function useWorkspaceJobs() {
   const [hasApiKey, setHasApiKey] = useState(() => hasAnyApiKey());
+  const [hasImageKey, setHasImageKey] = useState(() => hasImageApiKey());
+  const [hasTextKey, setHasTextKey] = useState(() => hasTextApiKey());
   const [jobs, setJobs] = useState<StoredJob[]>(loadInitialJobs);
   const jobsRef = useRef(jobs);
   useEffect(() => { jobsRef.current = jobs; }, [jobs]);
@@ -37,6 +39,16 @@ export function useWorkspaceJobs() {
   const [retryData, setRetryData] = useState<RetryData | null>(null);
   const [clearAllDialogOpen, setClearAllDialogOpen] = useState<Mode | null>(null);
   const [cancelJobId, setCancelJobId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const refreshKeys = () => {
+      setHasApiKey(hasAnyApiKey());
+      setHasImageKey(hasImageApiKey());
+      setHasTextKey(hasTextApiKey());
+    };
+    window.addEventListener('nova-model-registry-updated', refreshKeys);
+    return () => window.removeEventListener('nova-model-registry-updated', refreshKeys);
+  }, []);
 
   useEffect(() => {
     const stored = loadInitialJobs();
@@ -209,6 +221,8 @@ export function useWorkspaceJobs() {
 
   return {
     hasApiKey,
+    hasImageKey,
+    hasTextKey,
     jobs,
     textJobs,
     imageJobs,
@@ -216,7 +230,11 @@ export function useWorkspaceJobs() {
     retryData,
     clearAllDialogOpen,
     cancelJobId,
-    setHasApiKey,
+    setHasApiKey: (hasKey: boolean) => {
+      setHasApiKey(hasKey);
+      setHasImageKey(hasImageApiKey());
+      setHasTextKey(hasTextApiKey());
+    },
     setRetryData,
     setClearAllDialogOpen,
     setCancelJobId,
