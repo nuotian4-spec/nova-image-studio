@@ -10,6 +10,7 @@ import {
 import {
   mapImageRequest,
   mapTextRequest,
+  parseParentStudioMessage,
   persistedRegistryHasApiKey,
   shouldHideVideoTab,
   shouldPersistApiKey,
@@ -203,6 +204,61 @@ describe('embedded 拒绝 persist apiKey', () => {
     expect(hasImageApiKey()).toBe(false);
     expect(hasTextApiKey()).toBe(false);
     expect(persistedRegistryHasApiKey(localStorage.getItem('nova-model-registry'))).toBe(false);
+  });
+
+  it('扁平信封回归：parse 仍能读出 image.apiKey', () => {
+    const parsed = parseParentStudioMessage(parentConfig({
+      image: {
+        apiKey: 'sk-flat-image',
+        keyId: 'img-key',
+        model: 'gpt-image-2',
+        protocol: 'openai_images',
+      },
+    }));
+    expect(parsed && 'image' in parsed ? parsed.image?.apiKey : '').toBe('sk-flat-image');
+  });
+
+  it('嵌套 payload 的 config 能 ingest 出 image.apiKey', () => {
+    const nested = {
+      type: 'sub2api:nova-studio-config' as const,
+      payload: {
+        sessionId: 'sess-nested',
+        revision: 2,
+        baseUrl: PARENT_BASE,
+        uiMode: 'embedded' as const,
+        hideVideo: true,
+        hideByokSettings: true,
+        image: {
+          apiKey: 'sk-nested-image',
+          keyId: 'nested-key',
+          model: 'gpt-image-2',
+          protocol: 'openai_images',
+          models: [{ model: 'gpt-image-2', protocol: 'openai_images' }],
+        },
+        text: {
+          apiKey: 'sk-nested-text',
+          model: 'gpt-4o-mini',
+          protocol: 'openai_chat_completions',
+        },
+      },
+    };
+    const parsed = parseParentStudioMessage(nested);
+    expect(parsed && 'image' in parsed ? parsed.image?.apiKey : '').toBe('sk-nested-image');
+    expect(parsed && 'text' in parsed ? parsed.text?.apiKey : '').toBe('sk-nested-text');
+    expect(parsed && 'sessionId' in parsed ? parsed.sessionId : '').toBe('sess-nested');
+
+    expect(ingestParentStudioMessage(nested)).toBe('config');
+    expect(hasImageApiKey()).toBe(true);
+    expect(hasTextApiKey()).toBe(true);
+    expect(loadRegistry().imageModels[0].apiKey).toBe('sk-nested-image');
+    expect(persistedRegistryHasApiKey(localStorage.getItem('nova-model-registry'))).toBe(false);
+
+    expect(ingestParentStudioMessage({
+      type: 'sub2api:nova-studio-revoke',
+      payload: { sessionId: 'sess-nested' },
+    })).toBe('revoke');
+    expect(hasImageApiKey()).toBe(false);
+    expect(hasTextApiKey()).toBe(false);
   });
 
   it('拒绝把官方上游当 baseUrl，避免直连 api.openai.com / api.x.ai', () => {

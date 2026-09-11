@@ -258,9 +258,31 @@ export function listParentModelEntries(side: ParentSideConfig | undefined): Pare
   return [{ model, protocol: side.protocol }];
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * 兼容两种信封：扁平 `{ type, sessionId, image, ... }` 与 playground
+ * `{ type, payload: { sessionId, image, ... } }`。外层 type 优先。
+ */
+export function flattenParentStudioEnvelope(data: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(data)) return null;
+  const payload = data.payload;
+  if (!isPlainObject(payload)) {
+    return { ...data };
+  }
+  const merged: Record<string, unknown> = { ...payload, ...data };
+  delete merged.payload;
+  if (data.type != null && data.type !== '') {
+    merged.type = data.type;
+  }
+  return merged;
+}
+
 export function parseParentStudioMessage(data: unknown): ParentNovaStudioConfig | { type: typeof NOVA_STUDIO_REVOKE_TYPE } | null {
-  if (!data || typeof data !== 'object') return null;
-  const record = data as Record<string, unknown>;
+  const record = flattenParentStudioEnvelope(data);
+  if (!record) return null;
   if (record.type === NOVA_STUDIO_REVOKE_TYPE) {
     return { type: NOVA_STUDIO_REVOKE_TYPE };
   }
