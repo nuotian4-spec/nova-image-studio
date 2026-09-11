@@ -615,16 +615,38 @@ function canModelSupportSize(maxOutputSize: string, requestedSize: string): bool
 }
 
 /**
+ * 把 Agent 当前图像模型校正到完整 catalog 内的 id。
+ * current 合法则保留；非法 / 空 / Gemini 内置但不在 catalog 时用 defaults.textToImage，再不行用 catalog[0]。
+ * catalog 为空时无法校正（embed 注入前），原样返回 current，供 registry-updated 后再跑一次。
+ */
+export function pickAgentImageModel(
+  currentModel: string | null | undefined,
+  availableModels: AgentModelCatalogEntry[],
+  defaultModelId?: string | null,
+): ModelId {
+  const catalogIds = new Set(availableModels.map(model => model.id));
+  const current = typeof currentModel === 'string' ? currentModel.trim() : '';
+  if (current && catalogIds.has(current)) return current;
+
+  const fallback = typeof defaultModelId === 'string' ? defaultModelId.trim() : '';
+  if (fallback && catalogIds.has(fallback)) return fallback;
+
+  if (availableModels[0]?.id) return availableModels[0].id;
+  return current;
+}
+
+/**
  * 按优先级解析 Agent 提案中的模型意图，自动选择最合适的图像模型：
  * 1. Agent 明确指定了模型 id 且该 id 存在 → 直接使用
  * 2. 用户要求了分辨率档位但当前模型不支持 → 自动选择支持该档位且「够用就好」的模型
- * 3. 以上都不满足 → 保持当前模型
+ * 3. 以上都不满足 → 校正到 catalog 内合法 id（禁止把不在 catalog 的 gemini 原样返回）
  */
 export function resolveAgentModel(
   currentModel: ModelId,
   requestedModelId: string | undefined,
   requestedOutputSize: string | undefined,
   availableModels: AgentModelCatalogEntry[],
+  defaultModelId?: string | null,
 ): ModelId {
   // 1) Agent 明确指定了模型 → 验证后使用
   if (requestedModelId) {
@@ -632,12 +654,14 @@ export function resolveAgentModel(
     if (found) return found.id;
   }
 
-  // 2) 用户要求了分辨率档位，当前模型不支持 → 自动选择支持的模型
+  let chosen: string = currentModel;
+
+  // 2) 用户要求了分辨率档位，当前模型不支持或不在 catalog → 自动选择支持的模型
   if (requestedOutputSize && requestedOutputSize !== 'auto' && availableModels.length > 0) {
     const current = availableModels.find(m => m.id === currentModel);
     const currentCanSupport = current
       ? canModelSupportSize(current.maxOutputSize, requestedOutputSize)
-      : true;
+      : false;
     if (!currentCanSupport) {
       const candidates = availableModels.filter(m =>
         canModelSupportSize(m.maxOutputSize, requestedOutputSize),
@@ -647,13 +671,13 @@ export function resolveAgentModel(
         candidates.sort(
           (a, b) => (OUTPUT_SIZE_RANK[a.maxOutputSize] ?? 0) - (OUTPUT_SIZE_RANK[b.maxOutputSize] ?? 0),
         );
-        return candidates[0].id;
+        chosen = candidates[0].id;
       }
     }
   }
 
-  // 3) 无需切换
-  return currentModel;
+  // 3) 校正到 catalog：用户没点名模型时 LLM 给 null，current 可能仍是 gemini fallback
+  return pickAgentImageModel(chosen, availableModels, defaultModelId);
 }
 
 /**

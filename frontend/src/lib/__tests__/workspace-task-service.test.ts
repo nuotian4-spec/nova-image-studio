@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ackNovaTask, createNovaTask, resolveImageTaskProvider, type NovaTaskResponse } from '@/lib/ccode-task-client';
+import { ackNovaTask, createNovaTask, type NovaTaskResponse } from '@/lib/ccode-task-client';
 import { downloadAndStoreImages } from '@/lib/image-downloader';
 import { syncDynamicModelExports } from '@/lib/gemini-config';
 import type { StoredJob } from '@/lib/job-store';
@@ -15,7 +15,6 @@ vi.mock('@/lib/ccode-task-client', async importOriginal => {
     ...actual,
     ackNovaTask: vi.fn(),
     createNovaTask: vi.fn(),
-    resolveImageTaskProvider: vi.fn(),
   };
 });
 
@@ -30,7 +29,6 @@ vi.mock('@/lib/image-downloader', async importOriginal => {
 const mockedAckNovaTask = vi.mocked(ackNovaTask);
 const mockedCreateNovaTask = vi.mocked(createNovaTask);
 const mockedDownloadAndStoreImages = vi.mocked(downloadAndStoreImages);
-const mockedResolveImageTaskProvider = vi.mocked(resolveImageTaskProvider);
 
 function makeJob(overrides: Partial<StoredJob> = {}): StoredJob {
   return {
@@ -111,13 +109,6 @@ beforeEach(() => {
   mockedCreateNovaTask.mockReset();
   mockedCreateNovaTask.mockResolvedValue('task-advanced-1');
   mockedDownloadAndStoreImages.mockReset();
-  mockedResolveImageTaskProvider.mockReset();
-  mockedResolveImageTaskProvider.mockReturnValue({
-    apiKey: 'test-api-key',
-    baseUrl: 'https://api.openai.com',
-    protocol: 'openai',
-    modelId: 'gpt-image-2',
-  });
 });
 
 describe('submitTextToImage', () => {
@@ -151,6 +142,29 @@ describe('submitTextToImage', () => {
       gptImageBackground: 'transparent',
     }));
     expect(getJob().serverTaskId).toBe('task-advanced-1');
+  });
+
+  it('提交未知 gemini 默认值时 onError 且不 addJob', async () => {
+    const job = makeJob();
+    const { actions } = createActions(job);
+    const onError = vi.fn();
+
+    const ok = await submitTextToImage({
+      prompts: ['a cat'],
+      outputSize: '1K',
+      aspectRatio: '1:1',
+      temperature: 1,
+      model: 'gemini-3-pro-image-preview',
+      gptImageQuality: 'auto',
+      gptImageStyle: 'vivid',
+      gptImageBackground: 'auto',
+      parallelCount: 1,
+    }, actions, onError);
+
+    expect(ok).toBe(false);
+    expect(onError).toHaveBeenCalledWith('未找到图片模型配置: gemini-3-pro-image-preview');
+    expect(actions.addJob).not.toHaveBeenCalled();
+    expect(mockedCreateNovaTask).not.toHaveBeenCalled();
   });
 });
 

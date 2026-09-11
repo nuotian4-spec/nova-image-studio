@@ -7,6 +7,7 @@ import { createNovaTask, getNovaTask, resolveImageTaskProvider, type ImageRefere
 import { fetchImageAsBlob } from '@/lib/image-downloader';
 import {
   getGptImageAdvancedParamsForModel,
+  pickAgentImageModel,
   resolveAgentModel,
   type AgentModelCatalogEntry,
   type AgentResolvedLayout,
@@ -72,12 +73,31 @@ export interface PendingUpload {
 const PREVIEW_MAX_SIDE = 512;
 
 /** 构建当前可用的图像模型目录，供 Agent 选择模型 */
+function getAgentImageCatalog(): { catalog: AgentModelCatalogEntry[]; defaultId: string } {
+  const registry = loadRegistry();
+  return {
+    catalog: getCompleteImageModels(registry).map(m => ({
+      id: m.id,
+      name: m.name,
+      maxOutputSize: m.maxOutputSize,
+    })),
+    defaultId: registry.defaults.textToImage,
+  };
+}
+
 function buildModelCatalog(): AgentModelCatalogEntry[] {
-  return getCompleteImageModels(loadRegistry()).map(m => ({
-    id: m.id,
-    name: m.name,
-    maxOutputSize: m.maxOutputSize,
-  }));
+  return getAgentImageCatalog().catalog;
+}
+
+function sanitizeAgentImageModel(current?: string | null): ModelId {
+  const { catalog, defaultId } = getAgentImageCatalog();
+  return pickAgentImageModel(current, catalog, defaultId);
+}
+
+function persistAgentImageModelIfCataloged(model: ModelId): void {
+  if (buildModelCatalog().some(entry => entry.id === model)) {
+    void saveImageModel(model);
+  }
 }
 
 function base64ToBlob(base64: string, mimeType: string): Blob {
@@ -182,8 +202,11 @@ export function useAgentChat() {
   const [proposal, setProposal] = useState<AgentProposal | null>(null);
   const [streamingText, setStreamingText] = useState('');
   const [streamingReasoning, setStreamingReasoning] = useState('');
-  const [imageModel, setImageModelState] = useState<ModelId>(AGENT_DEFAULT_IMAGE_MODEL_FALLBACK);
+  const [imageModel, setImageModelState] = useState<ModelId>(() =>
+    sanitizeAgentImageModel(AGENT_DEFAULT_IMAGE_MODEL_FALLBACK),
+  );
   const [error, setError] = useState<string | null>(null);
+  const [retryHint, setRetryHint] = useState<string | null>(null);
   const [generatingTaskId, setGeneratingTaskId] = useState<string | null>(null);
   const [generatingStartedAt, setGeneratingStartedAt] = useState<number | null>(null);
   const [generationDraft, setGenerationDraft] = useState<AgentGenerationDraft | null>(null);
@@ -212,7 +235,15 @@ export function useAgentChat() {
   const imageModelRef = useRef(imageModel);
   useEffect(() => { imageModelRef.current = imageModel; }, [imageModel]);
   useEffect(() => {
-    const refresh = () => setHasApiKey(hasTextApiKey());
+    const refresh = () => {
+      setHasApiKey(hasTextApiKey());
+      const next = sanitizeAgentImageModel(imageModelRef.current);
+      if (next === imageModelRef.current) return;
+      imageModelRef.current = next;
+      setImageModelState(next);
+      persistAgentImageModelIfCataloged(next);
+    };
+    refresh();
     window.addEventListener('nova-model-registry-updated', refresh);
     return () => window.removeEventListener('nova-model-registry-updated', refresh);
   }, []);
@@ -282,7 +313,10 @@ export function useAgentChat() {
       setMessages(session.messages);
       setImages(session.images);
       seqRef.current = session.images.reduce((max, img) => Math.max(max, parseImgSeq(img.imgId)), 0);
-      if (session.imageModel) setImageModelState(session.imageModel as ModelId);
+      const restoredModel = sanitizeAgentImageModel(session.imageModel || imageModelRef.current);
+      imageModelRef.current = restoredModel;
+      setImageModelState(restoredModel);
+      if (restoredModel !== session.imageModel) persistAgentImageModelIfCataloged(restoredModel);
 
       if (pending) {
         // 恢复待确认的提案，使用户刷新后仍可看到「等待你确认」卡片
@@ -404,12 +438,15 @@ export function useAgentChat() {
   }, [getAgentTextModelConfig, images]);
 
   const runChat = useCallback((history: AgentMessage[], catalog: AgentImageRecord[]) => {
+    streamHandleRef.current?.abort();
+    streamHandleRef.current = null;
     const configured = getAgentTextModelConfig();
     const modelCatalog = buildModelCatalog();
     setPhase('streaming');
     flushAndCancelRaf();
     setStreamingText('');
     setStreamingReasoning('');
+    setRetryHint(null);
 
     let reasoningBuf = '';
 
@@ -435,20 +472,26 @@ export function useAgentChat() {
           setStreamingText('');
           setStreamingReasoning('');
         },
+        onRetry: (attempt, maxAttempts) => {
+          setRetryHint(`重试 ${attempt}/${maxAttempts}`);
+        },
         onDone: (fullText, parsedProposal) => {
           streamHandleRef.current = null;
           flushAndCancelRaf();
           setStreamingText('');
           setStreamingReasoning('');
+          setRetryHint(null);
           const text = fullText.trim();
           const reasoning = reasoningBuf.trim();
           if (parsedProposal) {
             // 模型自动选择：Agent 指定模型 id 或用户要求分辨率档位时自动切换
+            const { catalog: imageCatalog, defaultId } = getAgentImageCatalog();
             const resolvedModel = resolveAgentModel(
               imageModelRef.current,
               parsedProposal.requestedModelId,
               parsedProposal.requestedOutputSize,
-              modelCatalog,
+              imageCatalog,
+              defaultId,
             );
             if (resolvedModel !== imageModelRef.current) {
               imageModelRef.current = resolvedModel;
@@ -487,6 +530,7 @@ export function useAgentChat() {
           flushAndCancelRaf();
           setStreamingText('');
           setStreamingReasoning('');
+          setRetryHint(null);
           setError(err.message);
           setPhase('idle');
         },
@@ -839,7 +883,13 @@ export function useAgentChat() {
         if (bytes) references.push({ data: bytes.data, mimeType: bytes.mimeType });
       }
       const mode = references.length > 0 ? 'image-to-image' : 'text-to-image';
-      const provider = resolveImageTaskProvider(model);
+      const sanitizedModel = sanitizeAgentImageModel(model);
+      if (sanitizedModel !== imageModelRef.current) {
+        imageModelRef.current = sanitizedModel;
+        setImageModelState(sanitizedModel);
+      }
+      persistAgentImageModelIfCataloged(sanitizedModel);
+      const provider = resolveImageTaskProvider(sanitizedModel);
 
       const taskId = await createNovaTask({
         apiKey: provider.apiKey,
@@ -866,7 +916,7 @@ export function useAgentChat() {
         pendingAnalysis: pendingAnalysisRef.current,
         pendingReasoning: pendingReasoningRef.current,
         selectedImageIds,
-        model,
+        model: sanitizedModel,
         outputSize: params.outputSize,
         customSize: params.customSize,
         aspectRatio: params.aspectRatio,
@@ -891,7 +941,7 @@ export function useAgentChat() {
           action: selectedImageIds.length > 0 ? 'edit' : 'generate',
           prompt,
           referencedImageIds: selectedImageIds,
-          model,
+          model: sanitizedModel,
           outputSize: params.outputSize,
           customSize: params.customSize,
           aspectRatio: params.aspectRatio,
@@ -936,6 +986,7 @@ export function useAgentChat() {
     flushAndCancelRaf();
     setStreamingText('');
     setStreamingReasoning('');
+    setRetryHint(null);
     setGeneratingTaskId(null);
     setGeneratingStartedAt(null);
     setGenerationDraft(null);
@@ -952,8 +1003,10 @@ export function useAgentChat() {
   }, []);
 
   const setImageModel = useCallback((model: ModelId) => {
-    setImageModelState(model);
-    void saveImageModel(model);
+    const next = sanitizeAgentImageModel(model);
+    imageModelRef.current = next;
+    setImageModelState(next);
+    persistAgentImageModelIfCataloged(next);
   }, []);
 
   const toggleWebSearch = useCallback(() => {
@@ -1006,6 +1059,7 @@ export function useAgentChat() {
     flushAndCancelRaf();
     setStreamingText('');
     setStreamingReasoning('');
+    setRetryHint(null);
     setGeneratingTaskId(null);
     setGeneratingStartedAt(null);
     setGenerationDraft(null);
@@ -1042,12 +1096,13 @@ export function useAgentChat() {
       requestedModelId: pd.model,
     };
     // 重新编辑时恢复原始生图模型
-    const reeditCatalog = buildModelCatalog();
+    const { catalog: reeditCatalog, defaultId: reeditDefaultId } = getAgentImageCatalog();
     const resolvedModel = resolveAgentModel(
       imageModelRef.current,
       newProposal.requestedModelId,
       newProposal.requestedOutputSize,
       reeditCatalog,
+      reeditDefaultId,
     );
     if (resolvedModel !== imageModelRef.current) {
       imageModelRef.current = resolvedModel;
@@ -1192,6 +1247,7 @@ export function useAgentChat() {
     streamingReasoning,
     imageModel,
     error,
+    retryHint,
     generatingTaskId,
     generatingStartedAt,
     generationDraft,

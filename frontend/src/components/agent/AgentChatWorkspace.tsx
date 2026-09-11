@@ -723,6 +723,7 @@ export function AgentChatWorkspace({ wideMode = false, disabled = false, onConfi
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             {phaseHint}
+            {agent.retryHint ? ` · ${agent.retryHint}` : ''}
             {agent.phase === 'describing' && (
               <Button
                 variant="ghost"

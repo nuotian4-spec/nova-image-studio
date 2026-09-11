@@ -16,7 +16,7 @@ import { streamPromptOptimize, type StreamPromptOptimizeHandle } from '@/lib/pro
 import { loadJsonFromStorage, saveJsonToStorage } from '@/lib/settings-storage';
 import { requireDefaultConfiguredTextModel } from '@/lib/model-endpoints';
 import { addTextAsset, getAssetBlob, type ImageAsset, type TextAsset } from '@/lib/asset-store';
-import { MODEL_IMAGE_LIMITS, MODEL_OPTIONS, type ModelId } from '@/lib/gemini-config';
+import { getDefaultModelId, getModelOptions, MODEL_IMAGE_LIMITS, MODEL_OPTIONS, type ModelId } from '@/lib/gemini-config';
 import {
   DEFAULT_GPT_IMAGE_ADVANCED_PARAMS,
   detectClosestAspectRatio,
@@ -63,8 +63,8 @@ interface UploadedFile {
 
 interface ImageGenerationWorkbenchProps {
   wideMode?: boolean;
-  onSubmitText: (data: TextToImageSubmitInput) => void;
-  onSubmitImage: (data: ImageToImageSubmitInput) => void;
+  onSubmitText: (data: TextToImageSubmitInput) => void | boolean | Promise<void | boolean>;
+  onSubmitImage: (data: ImageToImageSubmitInput) => void | boolean | Promise<void | boolean>;
   disabled?: boolean;
   onDraftConsumed?: () => void;
   onConfigureApiKey?: () => void;
@@ -233,6 +233,20 @@ export function ImageGenerationWorkbench({
       cancelled = true;
     };
   }, [initialData]);
+
+  useEffect(() => {
+    const syncModelWithRegistry = () => {
+      const optionValues = getModelOptions().map((option) => option.value);
+      setModel((current) => {
+        if (optionValues.includes(current)) return current;
+        return getDefaultModelId() as ModelId;
+      });
+    };
+
+    syncModelWithRegistry();
+    window.addEventListener('nova-model-registry-updated', syncModelWithRegistry);
+    return () => window.removeEventListener('nova-model-registry-updated', syncModelWithRegistry);
+  }, []);
 
   useEffect(() => {
     if (!settingsReady) return;
@@ -561,37 +575,40 @@ export function ImageGenerationWorkbench({
     }
   }, [currentMode, prompt]);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!prompt.trim() || disabled || loading) return;
 
     const modelWithBilling = model;
-    if (pendingFiles.length > 0) {
-      onSubmitImage({
-        prompt: prompt.trim(),
-        files: pendingFiles,
-        outputSize,
-        customSize,
-        aspectRatio,
-        temperature,
-        model: modelWithBilling,
-        gptImageQuality: gptImageAdvancedParams.quality,
-        gptImageStyle: gptImageAdvancedParams.style,
-        gptImageBackground: gptImageAdvancedParams.background,
-        parallelCount,
-      });
-    } else {
-      onSubmitText({
-        prompts: [prompt.trim()],
-        outputSize,
-        customSize,
-        aspectRatio,
-        temperature,
-        model: modelWithBilling,
-        gptImageQuality: gptImageAdvancedParams.quality,
-        gptImageStyle: gptImageAdvancedParams.style,
-        gptImageBackground: gptImageAdvancedParams.background,
-        parallelCount,
-      });
+    try {
+      const submitted = pendingFiles.length > 0
+        ? await onSubmitImage({
+          prompt: prompt.trim(),
+          files: pendingFiles,
+          outputSize,
+          customSize,
+          aspectRatio,
+          temperature,
+          model: modelWithBilling,
+          gptImageQuality: gptImageAdvancedParams.quality,
+          gptImageStyle: gptImageAdvancedParams.style,
+          gptImageBackground: gptImageAdvancedParams.background,
+          parallelCount,
+        })
+        : await onSubmitText({
+          prompts: [prompt.trim()],
+          outputSize,
+          customSize,
+          aspectRatio,
+          temperature,
+          model: modelWithBilling,
+          gptImageQuality: gptImageAdvancedParams.quality,
+          gptImageStyle: gptImageAdvancedParams.style,
+          gptImageBackground: gptImageAdvancedParams.background,
+          parallelCount,
+        });
+      if (submitted === false) return;
+    } catch {
+      return;
     }
 
     setPendingFiles([]);

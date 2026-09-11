@@ -3,7 +3,6 @@ import type { GptImageBackground, GptImageQuality, GptImageStyle } from '@/lib/m
 import {
   getCompleteImageModels,
   getCompleteTextModels,
-  getImageModelById,
   getTextModelById,
   loadRegistry,
   type ProviderProtocol,
@@ -293,7 +292,11 @@ export async function checkModelsAvailability(
 
 export function resolveImageTaskProvider(modelId: string): { apiKey: string; baseUrl: string; protocol: ProviderProtocol; modelId: string } {
   const registry = loadRegistry();
-  const model = getImageModelById(registry, modelId);
+  // 嵌入注入的 id 为 embed-img:${model}，工作台可能传入 modelId / name
+  const models = getCompleteImageModels(registry);
+  const model = models.find((item) => item.id === modelId)
+    || models.find((item) => item.modelId === modelId)
+    || models.find((item) => item.name === modelId);
   if (!model) throw new Error(`未找到图片模型配置: ${modelId}`);
   const normalizedBaseUrl = normalizeModelBaseUrl(model.protocol, model.baseUrl);
   return {

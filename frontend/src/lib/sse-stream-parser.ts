@@ -12,6 +12,7 @@ export async function readSseStream(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   onEvent: (event: SseEvent) => void,
+  onActivity?: () => void,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -22,18 +23,23 @@ export async function readSseStream(
       if (signal.aborted) return;
       const { value, done } = await reader.read();
       if (done) break;
+      // 任意字节都算活着：推理模型可能先推 keepalive / 半帧
+      if (value.byteLength > 0) onActivity?.();
       buffer += decoder.decode(value, { stream: true });
 
       while (true) {
         const consumed = consumeSseEvent(buffer);
         if (!consumed) break;
         buffer = consumed.rest;
+        // comment keepalive（`: ping`）没有 data，也必须续上空闲计时
+        onActivity?.();
         const parsed = parseSseEvent(consumed.raw);
         if (parsed) onEvent(parsed);
       }
     }
     // flush 残留 buffer（部分实现最后一帧后没有空行结尾）
     if (buffer.trim().length > 0) {
+      onActivity?.();
       const parsed = parseSseEvent(buffer);
       if (parsed) onEvent(parsed);
     }

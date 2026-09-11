@@ -311,17 +311,30 @@ export async function retryDownloadCachedImages(
   };
 }
 
+function resolveImageProviderOrNotify(
+  model: string,
+  onError: (message: string) => void,
+): ReturnType<typeof resolveImageTaskProvider> | null {
+  try {
+    return resolveImageTaskProvider(model);
+  } catch (error) {
+    onError(error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
 export async function submitTextToImage(
   input: TextToImageSubmitInput,
   actions: SubmitActions,
   onError: (message: string) => void
-): Promise<void> {
-  const provider = resolveImageTaskProvider(input.model);
+): Promise<boolean> {
+  const provider = resolveImageProviderOrNotify(input.model, onError);
+  if (!provider) return false;
   const apiKey = provider.apiKey;
 
   if (!apiKey) {
     onError('请先配置 API 密钥');
-    return;
+    return false;
   }
 
   for (const prompt of input.prompts) {
@@ -368,19 +381,21 @@ export async function submitTextToImage(
       await actions.failJob(job.id, error instanceof Error ? error.message : String(error));
     }
   }
+  return true;
 }
 
 export async function submitImageToImage(
   input: ImageToImageSubmitInput,
   actions: SubmitActions,
   onError: (message: string) => void
-): Promise<void> {
-  const provider = resolveImageTaskProvider(input.model);
+): Promise<boolean> {
+  const provider = resolveImageProviderOrNotify(input.model, onError);
+  if (!provider) return false;
   const apiKey = provider.apiKey;
 
   if (!apiKey) {
     onError('请先配置 API 密钥');
-    return;
+    return false;
   }
 
   const refImages = input.files.map(file => ({
@@ -434,4 +449,5 @@ export async function submitImageToImage(
   } catch (error) {
     await actions.failJob(job.id, error instanceof Error ? error.message : String(error));
   }
+  return true;
 }

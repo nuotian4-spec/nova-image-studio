@@ -24,13 +24,24 @@ import type { TextProviderProtocol } from '@/lib/nova-text-protocol';
 import { readSseStream } from '@/lib/sse-stream-parser';
 
 const AGENT_GPT_REQUEST_MAX_ATTEMPTS = 3;
-const AGENT_CHAT_ATTEMPT_TIMEOUT_MS = 45_000;
+/** SSE 连续无帧才中断；reasoning / keepalive 都会续时，不是墙钟超时 */
+export const AGENT_CHAT_IDLE_TIMEOUT_MS = 45_000;
+/** 整段流的墙钟硬顶，避免死流一直占着「正在思考」 */
+export const AGENT_CHAT_HARD_TIMEOUT_MS = 180_000;
 const AGENT_IMAGE_DESCRIBE_ATTEMPT_TIMEOUT_MS = 20_000;
 
 class AgentRequestTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`请求超过 ${Math.round(timeoutMs / 1000)} 秒未响应`);
+  readonly kind: 'idle' | 'hard';
+
+  constructor(timeoutMs: number, kind: 'idle' | 'hard' = 'idle') {
+    const seconds = Math.round(timeoutMs / 1000);
+    super(
+      kind === 'hard'
+        ? `请求超过 ${seconds} 秒仍未完成`
+        : `请求超过 ${seconds} 秒未响应`,
+    );
     this.name = 'AgentRequestTimeoutError';
+    this.kind = kind;
   }
 }
 
@@ -276,16 +287,18 @@ async function runAgentStreamWithRetry(
   for (let attempt = 1; attempt <= AGENT_GPT_REQUEST_MAX_ATTEMPTS; attempt++) {
     if (signal.aborted) return;
     try {
-      await runAttemptWithTimeout(
-        attemptSignal => runAgentStream(baseUrl, input, callbacks, attemptSignal),
+      await runAttemptWithIdleAndHardTimeout(
+        (attemptSignal, touch) => runAgentStream(baseUrl, input, callbacks, attemptSignal, touch),
         signal,
-        AGENT_CHAT_ATTEMPT_TIMEOUT_MS,
+        AGENT_CHAT_IDLE_TIMEOUT_MS,
+        AGENT_CHAT_HARD_TIMEOUT_MS,
       );
       return;
     } catch (err) {
       if (signal.aborted) return;
       const normalized = normalizeStreamError(err);
       lastError = normalized;
+      // 空闲/硬顶超时只试一次：自动重试会清空已流出的 reasoning，UI 一直停在「正在思考」
       if (attempt >= AGENT_GPT_REQUEST_MAX_ATTEMPTS || !isRetryableAgentError(err)) {
         throw normalized;
       }
@@ -301,6 +314,7 @@ async function runAgentStream(
   input: StreamAgentInput,
   callbacks: StreamAgentCallbacks,
   signal: AbortSignal,
+  touch: () => void,
 ): Promise<void> {
   const instructions = buildInstructions(input.catalog, input.modelCatalog);
   const body = buildAgentRequestBody(input.protocol, input.model || AGENT_TEXT_MODEL_FALLBACK, input.history, instructions, Boolean(input.webSearch));
@@ -322,6 +336,8 @@ async function runAgentStream(
   if (!response.ok) {
     throw await readHttpError(response);
   }
+  // 拿到 HTTP 响应也算活动，避免首包很慢时被空闲超时误杀
+  touch();
   if (!response.body) {
     throw new Error('响应没有可读流');
   }
@@ -332,12 +348,13 @@ async function runAgentStream(
   const toolArgsByIndex = new Map<number, string>();
 
   const fireDone = () => {
-    if (fired) return;
+    if (fired || signal.aborted) return;
     fired = true;
     callbacks.onDone(accumulated, parseProposalArguments(toolArgs));
   };
 
   await readSseStream(response.body, signal, (event) => {
+    if (signal.aborted) return;
     if (!event.data) return;
     if (event.data === '[DONE]') {
       fireDone();
@@ -359,8 +376,9 @@ async function runAgentStream(
       toolArgsByIndex,
       fireDone,
     });
-  });
+  }, touch);
 
+  if (signal.aborted) return;
   fireDone();
 }
 
@@ -765,6 +783,45 @@ async function runAttemptWithTimeout<T>(
   }
 }
 
+/** 聊天流：有帧就续时；一直无帧才 idle abort；另加墙钟硬顶防死流 */
+async function runAttemptWithIdleAndHardTimeout<T>(
+  request: (signal: AbortSignal, touch: () => void) => Promise<T>,
+  parentSignal: AbortSignal | undefined,
+  idleMs: number,
+  hardMs: number,
+): Promise<T> {
+  const attempt = createAttemptSignal(parentSignal);
+  const idleError = new AgentRequestTimeoutError(idleMs, 'idle');
+  const hardError = new AgentRequestTimeoutError(hardMs, 'hard');
+  let idleTimer = 0;
+
+  const touch = () => {
+    if (attempt.signal.aborted) return;
+    window.clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(() => {
+      if (!attempt.signal.aborted) attempt.abort(idleError);
+    }, idleMs);
+  };
+
+  touch();
+  const hardTimer = window.setTimeout(() => {
+    if (!attempt.signal.aborted) attempt.abort(hardError);
+  }, hardMs);
+
+  try {
+    return await request(attempt.signal, touch);
+  } catch (err) {
+    if (attempt.signal.reason instanceof AgentRequestTimeoutError) {
+      throw attempt.signal.reason;
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(idleTimer);
+    window.clearTimeout(hardTimer);
+    attempt.cleanup();
+  }
+}
+
 async function runAgentRequestWithRetry<T>(
   request: (signal: AbortSignal) => Promise<T>,
   signal: AbortSignal | undefined,
@@ -779,7 +836,7 @@ async function runAgentRequestWithRetry<T>(
       if (signal?.aborted) throw err;
       const normalized = normalizeStreamError(err);
       lastError = normalized;
-      if (attempt >= AGENT_GPT_REQUEST_MAX_ATTEMPTS || !isRetryableAgentError(err)) {
+      if (attempt >= AGENT_GPT_REQUEST_MAX_ATTEMPTS || !isRetryableAgentError(err, { retryTimeout: true })) {
         throw normalized;
       }
     }
@@ -808,8 +865,8 @@ async function readHttpError(response: Response): Promise<Error> {
   return new Error(`${response.status} ${response.statusText}${detail ? `: ${detail.slice(0, 500)}` : ''}`);
 }
 
-function isRetryableAgentError(error: unknown): boolean {
-  if (error instanceof AgentRequestTimeoutError) return true;
+function isRetryableAgentError(error: unknown, options?: { retryTimeout?: boolean }): boolean {
+  if (error instanceof AgentRequestTimeoutError) return options?.retryTimeout === true;
   if (!(error instanceof Error)) return false;
   const lower = error.message.toLowerCase();
   return [
@@ -829,7 +886,6 @@ function isRetryableAgentError(error: unknown): boolean {
     'timeout',
     'timed out',
     '超时',
-    '超过',
     'rate limit',
     'temporarily',
     'overloaded',
@@ -838,7 +894,7 @@ function isRetryableAgentError(error: unknown): boolean {
 
 function normalizeStreamError(error: unknown): Error {
   if (error instanceof AgentRequestTimeoutError) {
-    return new Error(`${error.message}，已自动重试 ${AGENT_GPT_REQUEST_MAX_ATTEMPTS} 次仍未成功`);
+    return error;
   }
   if (error instanceof Error) {
     const lower = error.message.toLowerCase();

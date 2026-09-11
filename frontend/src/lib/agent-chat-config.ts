@@ -6,6 +6,7 @@ import type { GptImageBackground, GptImageQuality, GptImageStyle } from '@/lib/m
 
 // 默认值仅用于初始化，实际使用时从注册表读取
 export const AGENT_TEXT_MODEL_FALLBACK = 'gpt-5.4-mini';
+// 开源 standalone 无 catalog 时的初始化兜底。embed / 已注入 catalog 时禁止直接当选中模型，须经 pickAgentImageModel 校正。
 export const AGENT_DEFAULT_IMAGE_MODEL_FALLBACK = 'gemini-3-pro-image-preview';
 
 // ===== 上下文系统数据结构 =====
