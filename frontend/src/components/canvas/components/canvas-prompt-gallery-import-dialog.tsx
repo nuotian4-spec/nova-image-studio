@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ALL_CATEGORY, DEFAULT_CATEGORIES, PROMPT_DATA_SOURCES, fetchAllPromptSources, getPromptSourceLabel, type PromptWithKey } from "@/lib/prompt-gallery-data";
+import { matchesPromptGalleryQuery } from "@/lib/prompt-gallery-search";
 import { cn } from "@/lib/utils";
 
 type CanvasPromptGalleryImportDialogProps = {
@@ -60,16 +61,10 @@ function isBlacklisted(prompt: PromptWithKey, blacklist: string[]) {
 }
 
 function matchesPrompt(prompt: PromptWithKey, query: string) {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return [
-    prompt.title,
-    prompt.content,
-    prompt.contributor || "",
-    prompt.notes || "",
-    prompt.tags.join(" "),
-    prompt.source || "",
-  ].some((value) => value.toLowerCase().includes(q));
+  if (matchesPromptGalleryQuery(prompt, query)) return true;
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return (prompt.source || "").toLowerCase().includes(needle);
 }
 
 export function CanvasPromptGalleryImportDialog({ open, importing, onOpenChange, onConfirm }: CanvasPromptGalleryImportDialogProps) {

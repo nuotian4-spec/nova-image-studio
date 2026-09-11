@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
-import { Loader2, ExternalLink, Copy, Check, ChevronLeft, ChevronRight, Maximize2, X, Tag, Download, ImagePlus, Wand2, Save } from 'lucide-react';
+import { Loader2, ExternalLink, Copy, Check, ChevronLeft, ChevronRight, Maximize2, X, Tag, Download, ImagePlus, Wand2, Save, Pencil, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ImageHoverActions } from '@/components/workspace/results/ImageHoverActions';
 import { runImageAction, dispatchImageActionToast, type ImageActionPayload } from '@/lib/image-actions';
 import { addTextAsset } from '@/lib/asset-store';
+import { isLocalPrompt } from '@/lib/prompt-gallery-data';
 import type { PromptGalleryItem } from '@/lib/prompt-gallery-types';
 
 export type { PromptGalleryItem };
@@ -32,23 +33,29 @@ export const PromptCard = memo(function PromptCard({
   onShowDetail,
   onShowImages,
   imageCache,
-  onImageLoad
+  onImageLoad,
+  onEdit,
+  onDelete,
 }: { 
   prompt: PromptGalleryItem & { uniqueKey: string };
   onShowDetail: () => void;
   onShowImages: (initialIndex?: number) => void;
   imageCache: Set<string>;
   onImageLoad: (url: string) => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
   const [imageIndex, setImageIndex] = useState(0);
   const [copied, setCopied] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
+  const [erroredImageUrl, setErroredImageUrl] = useState<string | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
   const hasMultipleImages = prompt.images.length > 1;
   const currentImageUrl = prompt.images[imageIndex];
   const isCached = imageCache.has(currentImageUrl);
-  const imageLoaded = isCached;
+  const imageFailed = erroredImageUrl === currentImageUrl;
+  const imageLoaded = isCached && !imageFailed;
   const currentPayload = makePromptGalleryImagePayload(prompt, currentImageUrl, imageIndex);
 
   // Intersection Observer for lazy rendering
@@ -77,7 +84,12 @@ export const PromptCard = memo(function PromptCard({
   }, []);
 
   const handleImageLoaded = () => {
+    if (erroredImageUrl === currentImageUrl) setErroredImageUrl(null);
     onImageLoad(currentImageUrl);
+  };
+
+  const handleImageError = () => {
+    setErroredImageUrl(currentImageUrl);
   };
 
   const handleCopy = (e: React.MouseEvent) => {
@@ -107,18 +119,26 @@ export const PromptCard = memo(function PromptCard({
         >
           {isVisible ? (
             <>
-              {!imageLoaded && (
+              {!imageLoaded && !imageFailed && (
                 <div className="absolute inset-0 flex items-center justify-center">
                   <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
                 </div>
               )}
-              <img
-                src={currentImageUrl}
-                alt={prompt.title}
-                className={`w-full h-full object-cover transition-opacity ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
-                loading="lazy"
-                onLoad={handleImageLoaded}
-              />
+              {imageFailed && (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-12 h-12 bg-muted-foreground/10 rounded-lg" />
+                </div>
+              )}
+              {!imageFailed && (
+                <img
+                  src={currentImageUrl}
+                  alt={prompt.title}
+                  className={`w-full h-full object-cover transition-opacity ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
+                  loading="lazy"
+                  onLoad={handleImageLoaded}
+                  onError={handleImageError}
+                />
+              )}
             </>
           ) : (
             <div className="absolute inset-0 flex items-center justify-center">
@@ -172,13 +192,20 @@ export const PromptCard = memo(function PromptCard({
       {/* Content */}
       <div className="p-3 space-y-2">
         {/* Title */}
-        <h3 
-          className="font-semibold text-sm line-clamp-1 cursor-pointer hover:text-primary transition-colors"
-          onClick={onShowDetail}
-          title={prompt.title}
-        >
-          {prompt.title}
-        </h3>
+        <div className="flex items-center gap-1.5">
+          <h3 
+            className="font-semibold text-sm line-clamp-1 cursor-pointer hover:text-primary transition-colors min-w-0"
+            onClick={onShowDetail}
+            title={prompt.title}
+          >
+            {prompt.title}
+          </h3>
+          {isLocalPrompt(prompt) && (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 flex-shrink-0">
+              本站
+            </Badge>
+          )}
+        </div>
 
         {/* Tags */}
         <div className="flex flex-wrap gap-1">
@@ -221,19 +248,49 @@ export const PromptCard = memo(function PromptCard({
               </a>
             )}
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleCopy}
-            className="h-7 px-2 flex-shrink-0"
-            title="复制提示词"
-          >
-            {copied ? (
-              <Check className="w-3.5 h-3.5 text-success" />
-            ) : (
-              <Copy className="w-3.5 h-3.5" />
+          <div className="flex items-center flex-shrink-0">
+            {onEdit && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onEdit();
+                }}
+                className="h-7 px-2"
+                title="编辑本站模板"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </Button>
             )}
-          </Button>
+            {onDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDelete();
+                }}
+                className="h-7 px-2 text-destructive hover:text-destructive"
+                title="删除本站模板"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleCopy}
+              className="h-7 px-2"
+              title="复制提示词"
+            >
+              {copied ? (
+                <Check className="w-3.5 h-3.5 text-success" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
@@ -427,7 +484,11 @@ export function PromptDetailModal({
           )}
 
           {/* Source */}
-          {prompt.sourceUrl && (
+          {isLocalPrompt(prompt) ? (
+            <div className="text-sm text-muted-foreground">
+              来源：本站
+            </div>
+          ) : prompt.sourceUrl ? (
             <div className="text-sm text-muted-foreground flex items-center gap-1.5">
               <span>来源：</span>
               <a
@@ -440,7 +501,7 @@ export function PromptDetailModal({
                 <ExternalLink className="w-3 h-3" />
               </a>
             </div>
-          )}
+          ) : null}
 
           {/* Category */}
           {prompt.category && (

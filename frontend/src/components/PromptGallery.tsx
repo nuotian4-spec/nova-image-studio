@@ -1,22 +1,39 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
-import { Search, Loader2, AlertCircle, ExternalLink, ChevronUp } from 'lucide-react';
+import { Search, Loader2, AlertCircle, ExternalLink, ChevronUp, Plus } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   PromptCard,
   PromptDetailModal,
   PromptGalleryImagePreviewModal,
 } from '@/components/prompt-gallery/PromptGallerySubcomponents';
 import {
+  LocalPromptDeleteDialog,
+  LocalPromptFormDialog,
+} from '@/components/prompt-gallery/LocalPromptEditor';
+import {
   ALL_CATEGORY,
   DEFAULT_CATEGORIES,
+  LOCAL_CATEGORY,
+  LOCAL_PROMPT_SOURCE_LABEL,
   PROMPT_DATA_SOURCES,
+  canEditGalleryPrompt,
   fetchAllPromptSources,
+  fetchLocalPromptRecords,
   getPromptSourceLabel,
+  isLocalPrompt,
+  mapLocalPromptRecords,
+  mergePromptGalleryCategories,
+  mergePromptGallerySources,
+  pinLocalGalleryPrompts,
+  writeLocalPrompt,
   type PromptWithKey,
 } from '@/lib/prompt-gallery-data';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { matchesPromptGalleryQuery } from '@/lib/prompt-gallery-search';
 import { seededShuffle } from '@/lib/seeded-shuffle';
+import type { LocalPromptType } from '@/lib/prompt-gallery-types';
 
 const PROMPT_GALLERY_STEP = 20;
 const PROMPT_GALLERY_WIDE_STEP = 30;
@@ -35,30 +52,57 @@ const PromptGallery = memo(function PromptGallery({ wideMode = false }: { wideMo
   const [imageCache, setImageCache] = useState<Set<string>>(new Set());
   const [displayCount, setDisplayCount] = useState(pageStep);
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [editor, setEditor] = useState<{ mode: 'create' } | { mode: 'edit'; prompt: PromptWithKey } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<PromptWithKey | null>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const [writing, setWriting] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
+  const refreshLocalPrompts = useCallback(async () => {
+    const localRecords = await fetchLocalPromptRecords();
+    const localPrompts = mapLocalPromptRecords(localRecords);
+    setAllPrompts(prev => mergePromptGallerySources(prev, localPrompts));
+    setCategories(prev => mergePromptGalleryCategories(prev, localPrompts));
+    return localPrompts;
+  }, []);
+
   useEffect(() => {
+    let cancelled = false;
+
     fetch('/api/nova/blacklist')
       .then((res) => res.json())
       .then((data) => {
+        if (cancelled) return;
         if (Array.isArray(data.keywords)) {
           setBlacklist(data.keywords.map((keyword: string) => keyword.toLowerCase()));
         }
       })
       .catch(() => {
-        setBlacklist([]);
+        if (!cancelled) setBlacklist([]);
       });
 
-    fetchAllPromptSources()
-      .then((result) => {
-        setCategories(result.categories);
-        setAllPrompts(result.prompts);
-        setLoading(false);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : '提示词广场加载失败');
+    Promise.allSettled([fetchAllPromptSources(), fetchLocalPromptRecords()])
+      .then(([remoteResult, localResult]) => {
+        if (cancelled) return;
+        const remote = remoteResult.status === 'fulfilled'
+          ? remoteResult.value
+          : { prompts: [] as PromptWithKey[], categories: DEFAULT_CATEGORIES };
+        const localRecords = localResult.status === 'fulfilled' ? localResult.value : [];
+        const localPrompts = mapLocalPromptRecords(localRecords);
+        const merged = mergePromptGallerySources(remote.prompts, localPrompts);
+        if (merged.length === 0 && remoteResult.status === 'rejected') {
+          setError(remoteResult.reason instanceof Error ? remoteResult.reason.message : '提示词广场加载失败');
+        } else {
+          setError(null);
+          setCategories(mergePromptGalleryCategories(remote.categories, localPrompts));
+          setAllPrompts(merged);
+        }
         setLoading(false);
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleShowDetail = useCallback((prompt: PromptWithKey) => {
@@ -96,28 +140,95 @@ const PromptGallery = memo(function PromptGallery({ wideMode = false }: { wideMo
     }
 
     const hasChinese = (text: string) => /[\u4e00-\u9fa5]/.test(text);
-    prompts = prompts.filter((prompt) => hasChinese(prompt.title) || hasChinese(prompt.content));
+    prompts = prompts.filter((prompt) => (
+      isLocalPrompt(prompt) || hasChinese(prompt.title) || hasChinese(prompt.content)
+    ));
 
     if (selectedCategory !== ALL_CATEGORY) {
       prompts = prompts.filter((prompt) => prompt.category === selectedCategory);
     }
 
     if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      prompts = prompts.filter((prompt) => (
-        prompt.title.toLowerCase().includes(query)
-        || prompt.content.toLowerCase().includes(query)
-        || (prompt.contributor && prompt.contributor.toLowerCase().includes(query))
-      ));
+      prompts = prompts.filter((prompt) => matchesPromptGalleryQuery({
+        title: prompt.title,
+        content: prompt.content,
+        contributor: prompt.contributor,
+        notes: prompt.notes,
+        tags: prompt.tags,
+      }, searchQuery));
     }
 
     return prompts;
   }, [allPrompts, blacklist, searchQuery, selectedCategory]);
 
   const filteredPrompts = useMemo(() => {
-    const seed = `${searchQuery}\0${blacklist.join('\0')}\0${baseFilteredPrompts.map((prompt) => prompt.uniqueKey).join('\0')}`;
-    return seededShuffle(baseFilteredPrompts, seed);
+    const local = baseFilteredPrompts.filter(isLocalPrompt);
+    const remote = baseFilteredPrompts.filter((prompt) => !isLocalPrompt(prompt));
+    const seed = `${searchQuery}\0${blacklist.join('\0')}\0${remote.map((prompt) => prompt.uniqueKey).join('\0')}`;
+    return pinLocalGalleryPrompts([...local, ...seededShuffle(remote, seed)]);
   }, [baseFilteredPrompts, blacklist, searchQuery]);
+
+  const handleWriteError = (message: string, status?: number) => {
+    if (status === 403) {
+      setWriteError(message || '口令错误或未配置写入口令');
+      return;
+    }
+    setWriteError(message || '写入失败');
+  };
+
+  const handleCreateOrEdit = useCallback(async (payload: {
+    title: string;
+    content: string;
+    type: LocalPromptType;
+    password: string;
+  }) => {
+    if (!editor) return;
+    setWriting(true);
+    setWriteError(null);
+    try {
+      const result = editor.mode === 'create'
+        ? await writeLocalPrompt({ method: 'POST', ...payload })
+        : await writeLocalPrompt({ method: 'PUT', id: editor.prompt.id, ...payload });
+      if (!result.ok) {
+        handleWriteError(result.error || '写入失败', result.status);
+        return;
+      }
+      await refreshLocalPrompts();
+      if (editor.mode === 'create') {
+        setSearchQuery('');
+        setSelectedCategory(LOCAL_CATEGORY);
+      }
+      setEditor(null);
+    } catch (err) {
+      handleWriteError(err instanceof Error ? err.message : '写入失败');
+    } finally {
+      setWriting(false);
+    }
+  }, [editor, refreshLocalPrompts]);
+
+  const handleDelete = useCallback(async (password: string) => {
+    if (!deleteTarget) return;
+    setWriting(true);
+    setWriteError(null);
+    try {
+      const result = await writeLocalPrompt({
+        method: 'DELETE',
+        id: deleteTarget.id,
+        password,
+      });
+      if (!result.ok) {
+        handleWriteError(result.error || '删除失败', result.status);
+        return;
+      }
+      await refreshLocalPrompts();
+      if (detailPrompt?.uniqueKey === deleteTarget.uniqueKey) setDetailPrompt(null);
+      setDeleteTarget(null);
+    } catch (err) {
+      handleWriteError(err instanceof Error ? err.message : '删除失败');
+    } finally {
+      setWriting(false);
+    }
+  }, [deleteTarget, detailPrompt, refreshLocalPrompts]);
 
   useEffect(() => {
     queueMicrotask(() => setDisplayCount(pageStep));
@@ -171,14 +282,27 @@ const PromptGallery = memo(function PromptGallery({ wideMode = false }: { wideMo
     <>
       <div className="space-y-6">
         <div className="space-y-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="搜索提示词、标题或作者..."
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              className="pl-9"
-            />
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="搜索提示词、标题、作者或标签..."
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <Button
+              type="button"
+              onClick={() => {
+                setWriteError(null);
+                setEditor({ mode: 'create' });
+              }}
+              className="flex-shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              添加模板
+            </Button>
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -205,8 +329,11 @@ const PromptGallery = memo(function PromptGallery({ wideMode = false }: { wideMo
               <ExternalLink className="w-3 h-3" />
             </PopoverTrigger>
             <PopoverContent align="end" className="w-72 p-2">
-              <p className="px-2 pb-1.5 text-xs font-medium text-muted-foreground">提示词来源（{PROMPT_DATA_SOURCES.length}）</p>
+              <p className="px-2 pb-1.5 text-xs font-medium text-muted-foreground">提示词来源（{PROMPT_DATA_SOURCES.length + 1}）</p>
               <div className="space-y-0.5">
+                <div className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm">
+                  <span className="truncate">{LOCAL_PROMPT_SOURCE_LABEL}</span>
+                </div>
                 {PROMPT_DATA_SOURCES.map((source) => (
                   <a
                     key={source.name}
@@ -233,6 +360,14 @@ const PromptGallery = memo(function PromptGallery({ wideMode = false }: { wideMo
               onShowImages={(initialIndex) => handleShowImages(prompt, initialIndex)}
               imageCache={imageCache}
               onImageLoad={handleImageLoad}
+              onEdit={canEditGalleryPrompt(prompt) ? () => {
+                setWriteError(null);
+                setEditor({ mode: 'edit', prompt });
+              } : undefined}
+              onDelete={canEditGalleryPrompt(prompt) ? () => {
+                setWriteError(null);
+                setDeleteTarget(prompt);
+              } : undefined}
             />
           ))}
         </div>
@@ -274,6 +409,38 @@ const PromptGallery = memo(function PromptGallery({ wideMode = false }: { wideMo
           prompt={imagePreview.prompt}
           initialIndex={imagePreview.initialIndex}
           onClose={() => setImagePreview(null)}
+        />
+      )}
+
+      {editor && (
+        <LocalPromptFormDialog
+          key={editor.mode === 'edit' ? editor.prompt.uniqueKey : 'create'}
+          mode={editor.mode}
+          initialTitle={editor.mode === 'edit' ? editor.prompt.title : ''}
+          initialContent={editor.mode === 'edit' ? editor.prompt.content : ''}
+          initialType={editor.mode === 'edit' ? (editor.prompt.localType || 1) : 1}
+          error={writeError}
+          submitting={writing}
+          onClose={() => {
+            if (writing) return;
+            setEditor(null);
+            setWriteError(null);
+          }}
+          onSubmit={payload => void handleCreateOrEdit(payload)}
+        />
+      )}
+
+      {deleteTarget && (
+        <LocalPromptDeleteDialog
+          promptTitle={deleteTarget.title}
+          error={writeError}
+          submitting={writing}
+          onClose={() => {
+            if (writing) return;
+            setDeleteTarget(null);
+            setWriteError(null);
+          }}
+          onConfirm={password => void handleDelete(password)}
         />
       )}
     </>
