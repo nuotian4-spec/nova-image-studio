@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Bot, Film, Frame, Images, LibraryBig, ScanSearch, Scissors, Sparkles, Video } from 'lucide-react';
 import { TabsList, TabsTrigger } from '@/components/ui/tabs';
 
@@ -44,7 +44,15 @@ interface WorkspaceModeTabsProps {
 }
 
 export function WorkspaceModeTabs({ wideMode = false, showPromptGallery = false, hideVideo = false }: WorkspaceModeTabsProps) {
-  const allTabs = getWorkspaceModeTabs({ hideVideo, showPromptGallery });
+  const [embeddedQuery, setEmbeddedQuery] = useState(false);
+  useEffect(() => {
+    try {
+      setEmbeddedQuery(new URLSearchParams(window.location.search).get('embedded') === '1');
+    } catch {
+      setEmbeddedQuery(false);
+    }
+  }, []);
+  const allTabs = getWorkspaceModeTabs({ hideVideo: hideVideo || embeddedQuery, showPromptGallery });
   const gridCols = gridColsClass(allTabs.length);
   const dragStateRef = useRef({
     pointerId: -1,
@@ -61,6 +69,7 @@ export function WorkspaceModeTabs({ wideMode = false, showPromptGallery = false,
           <TabsTrigger
             key={value}
             value={value}
+            data-workspace-tab={value}
             className="flex flex-row items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-medium data-active:bg-card data-active:text-foreground data-active:shadow-sm"
           >
             <Icon className="size-5 shrink-0" />
@@ -126,7 +135,7 @@ export function WorkspaceModeTabs({ wideMode = false, showPromptGallery = false,
       }}
     >
       {allTabs.map(({ value, icon: Icon, label }) => (
-        <TabsTrigger key={value} value={value} className={horizontalTriggerClass}>
+        <TabsTrigger key={value} value={value} data-workspace-tab={value} className={horizontalTriggerClass}>
           <Icon className="size-4 shrink-0" />
           <span className={labelClass}>{label}</span>
         </TabsTrigger>

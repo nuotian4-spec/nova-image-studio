@@ -40,6 +40,9 @@ export default function RootLayout({
               (function() {
                 try {
                   var params = new URLSearchParams(window.location.search);
+                  if (params.get('embedded') === '1') {
+                    document.documentElement.setAttribute('data-nova-embedded', '1');
+                  }
                   if (params.get('embedded') === '1' && window.parent && window.parent !== window) {
                     var parentRoot = window.parent.document.documentElement;
                     var parentTheme = parentRoot.getAttribute('data-theme') || parentRoot.getAttribute('data-dark') || '';

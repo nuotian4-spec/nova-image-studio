@@ -624,3 +624,8 @@ body {
 .animate-progress-indeterminate {
   animation: progress-indeterminate 1.4s ease-in-out infinite;
 }
+
+/* iframe ?embedded=1 首屏就藏视频工作台，避免静态 HTML hydration 前露出来 */
+html[data-nova-embedded='1'] [data-workspace-tab='video-generation'] {
+  display: none !important;
+}

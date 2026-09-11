@@ -5,6 +5,7 @@ import {
   enableEmbeddedModeForTests,
   getSessionToken,
   isEmbeddedMode,
+  readEmbeddedQuery,
   resetEmbedRuntimeForTests,
   shouldHideVideo,
 } from '@/lib/embed/mode';
@@ -81,6 +82,12 @@ describe('hideVideo', () => {
     const values = getWorkspaceModeTabs({ hideVideo: true }).map((tab) => tab.value);
     expect(values).not.toContain('video-generation');
     expect(values).toContain('image-generation');
+  });
+
+  it('readEmbeddedQuery 不依赖默认参数求值 window', () => {
+    expect(readEmbeddedQuery('?embedded=1')).toBe(true);
+    expect(readEmbeddedQuery('?foo=1')).toBe(false);
+    expect(readEmbeddedQuery('')).toBe(false);
   });
 });
 

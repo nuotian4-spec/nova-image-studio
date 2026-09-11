@@ -61,9 +61,10 @@ export function getEmbedRuntimeState(): EmbedRuntimeState {
   return state;
 }
 
-export function readEmbeddedQuery(search = typeof window !== 'undefined' ? window.location.search : ''): boolean {
+export function readEmbeddedQuery(search?: string): boolean {
+  const value = search ?? (typeof window !== 'undefined' ? window.location.search : '');
   try {
-    return new URLSearchParams(search).get('embedded') === '1';
+    return new URLSearchParams(value).get('embedded') === '1';
   } catch {
     return false;
   }

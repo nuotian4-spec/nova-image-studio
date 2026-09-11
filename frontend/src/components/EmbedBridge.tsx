@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect } from 'react';
 import { ingestParentStudioMessage } from '@/lib/embed/apply-parent';
 import { isEmbeddedMode, markEmbeddedFromQuery } from '@/lib/embed/mode';
 import { installEmbeddedNovaAuthIntercept } from '@/lib/embed/nova-auth-fetch';
@@ -45,9 +45,12 @@ function ingestAndTheme(data: unknown): void {
 }
 
 export function EmbedBridge() {
-  useEffect(() => {
+  useLayoutEffect(() => {
     markEmbeddedFromQuery();
     if (isEmbeddedMode()) applyThemeFromParent();
+  }, []);
+
+  useEffect(() => {
 
     const uninstallAuth = installEmbeddedNovaAuthIntercept();
     window.__novaEmbedIngest = ingestAndTheme;
