@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getWorkspaceModeTabs } from '@/components/workspace/WorkspaceModeTabs';
 import { ingestParentStudioMessage } from '@/lib/embed/apply-parent';
 import {
   enableEmbeddedModeForTests,
+  getSessionToken,
   isEmbeddedMode,
   resetEmbedRuntimeForTests,
   shouldHideVideo,
@@ -17,6 +18,11 @@ import {
   stripApiKeysFromRegistry,
   type ParentNovaStudioConfig,
 } from '@/lib/embed/protocol-map';
+import {
+  installEmbeddedNovaAuthIntercept,
+  shouldAttachSessionToken,
+  uninstallEmbeddedNovaAuthIntercept,
+} from '@/lib/embed/nova-auth-fetch';
 import { loadRegistry, saveRegistry } from '@/lib/nova-models';
 import { hasImageApiKey, hasTextApiKey } from '@/lib/settings-storage';
 
@@ -279,3 +285,91 @@ describe('embedded 拒绝 persist apiKey', () => {
     expect(hasTextApiKey()).toBe(false);
   });
 });
+
+function localStorageBlob(): string {
+  const parts: string[] = [];
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (!key) continue;
+    parts.push(`${key}=${localStorage.getItem(key) || ''}`);
+  }
+  return parts.join('\n');
+}
+
+function readAuthorization(input: RequestInfo | URL, init?: RequestInit): string | null {
+  if (init?.headers) return new Headers(init.headers).get('Authorization');
+  if (typeof Request !== 'undefined' && input instanceof Request) return input.headers.get('Authorization');
+  return null;
+}
+
+describe('sessionToken 只给 /api/nova 加 Bearer，不 persist、不当 API Key', () => {
+  const jwt = 'panel-jwt-session-token';
+  let fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit; auth: string | null }>;
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    resetEmbedRuntimeForTests();
+    localStorage.clear();
+    uninstallEmbeddedNovaAuthIntercept();
+    fetchCalls = [];
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ input, init, auth: readAuthorization(input, init) });
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    installEmbeddedNovaAuthIntercept();
+  });
+
+  afterEach(() => {
+    uninstallEmbeddedNovaAuthIntercept();
+    globalThis.fetch = originalFetch;
+  });
+
+  it('ingest payload.sessionToken 后 /api/nova/tasks 带 Bearer，/v1/ 网关不带，revoke 后不再带', async () => {
+    expect(shouldAttachSessionToken('/api/nova/tasks')).toBe(true);
+    expect(shouldAttachSessionToken('https://parent.example/v1/images/generations')).toBe(false);
+    expect(shouldAttachSessionToken('/api/nova/ws')).toBe(true);
+
+    const nested = {
+      type: 'sub2api:nova-studio-config' as const,
+      payload: {
+        sessionId: 'sess-jwt',
+        revision: 3,
+        baseUrl: PARENT_BASE,
+        uiMode: 'embedded' as const,
+        hideVideo: true,
+        hideByokSettings: true,
+        sessionToken: jwt,
+        image: {
+          apiKey: 'sk-image-not-jwt',
+          model: 'gpt-image-2',
+          protocol: 'openai_images',
+        },
+      },
+    };
+    const parsed = parseParentStudioMessage(nested);
+    expect(parsed && 'sessionToken' in parsed ? parsed.sessionToken : '').toBe(jwt);
+    expect(ingestParentStudioMessage(nested)).toBe('config');
+    expect(getSessionToken()).toBe(jwt);
+    expect(loadRegistry().imageModels[0]?.apiKey).toBe('sk-image-not-jwt');
+    expect(loadRegistry().imageModels[0]?.apiKey).not.toBe(jwt);
+    expect(localStorageBlob()).not.toContain(jwt);
+
+    await fetch('/api/nova/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    expect(fetchCalls.at(-1)?.auth).toBe(`Bearer ${jwt}`);
+
+    await fetch('https://parent.example/v1/images/generations', { method: 'POST' });
+    expect(fetchCalls.at(-1)?.auth).toBeNull();
+
+    const wsUrl = new URL('/api/nova/ws', 'https://parent.example/');
+    expect(wsUrl.search).toBe('');
+    expect(wsUrl.href).not.toContain(jwt);
+
+    expect(ingestParentStudioMessage({ type: 'sub2api:nova-studio-revoke', payload: { sessionId: 'sess-jwt' } })).toBe('revoke');
+    expect(getSessionToken()).toBe('');
+    await fetch('/api/nova/tasks', { method: 'POST' });
+    expect(fetchCalls.at(-1)?.auth).toBeNull();
+    expect(localStorageBlob()).not.toContain(jwt);
+  });
+});
+

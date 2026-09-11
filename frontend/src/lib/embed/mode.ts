@@ -20,6 +20,7 @@ export interface EmbedRuntimeState {
   theme?: 'dark' | 'light' | 'system';
   image?: ParentSideConfig;
   text?: ParentSideConfig;
+  sessionToken: string;
   memoryRegistry: NovaModelRegistry | null;
 }
 
@@ -32,6 +33,7 @@ const EMPTY_STATE: EmbedRuntimeState = {
   baseUrl: '',
   hideVideo: false,
   hideByokSettings: false,
+  sessionToken: '',
   memoryRegistry: null,
 };
 
@@ -80,6 +82,10 @@ export function shouldHideByokSettings(): boolean {
   return isEmbeddedMode();
 }
 
+export function getSessionToken(): string {
+  return state.sessionToken || '';
+}
+
 export function getEmbeddedMemoryRegistry(): NovaModelRegistry | null {
   return state.memoryRegistry;
 }
@@ -115,6 +121,7 @@ export function applyParentStudioMessage(data: unknown): 'config' | 'revoke' | '
       hideByokSettings: true,
       image: undefined,
       text: undefined,
+      sessionToken: '',
       memoryRegistry: {
         imageModels: [],
         textModels: [],
@@ -162,6 +169,7 @@ export function applyParentConfig(config: ParentNovaStudioConfig): 'config' | 'i
     theme: config.theme,
     image: config.image,
     text: config.text,
+    sessionToken: config.sessionToken || '',
     memoryRegistry: state.memoryRegistry,
   };
   emit();

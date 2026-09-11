@@ -64,6 +64,8 @@ export interface ParentNovaStudioConfig {
   image?: ParentSideConfig;
   text?: ParentSideConfig;
   theme?: 'dark' | 'light' | 'system';
+  /** 面板 JWT，只用于同源 /api/nova，不是生图/文本 API Key */
+  sessionToken?: string;
 }
 
 export interface ImageRequestMapping {
@@ -293,6 +295,7 @@ export function parseParentStudioMessage(data: unknown): ParentNovaStudioConfig 
   const theme = record.theme === 'dark' || record.theme === 'light' || record.theme === 'system'
     ? record.theme
     : undefined;
+  const sessionToken = String(record.sessionToken || '').trim();
 
   return {
     type: NOVA_STUDIO_CONFIG_TYPE,
@@ -305,6 +308,7 @@ export function parseParentStudioMessage(data: unknown): ParentNovaStudioConfig 
     ...(image ? { image } : {}),
     ...(text ? { text } : {}),
     ...(theme ? { theme } : {}),
+    ...(sessionToken ? { sessionToken } : {}),
   };
 }
 

@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { ingestParentStudioMessage } from '@/lib/embed/apply-parent';
 import { isEmbeddedMode, markEmbeddedFromQuery } from '@/lib/embed/mode';
+import { installEmbeddedNovaAuthIntercept } from '@/lib/embed/nova-auth-fetch';
 
 function applyThemeFromParent(theme?: 'dark' | 'light' | 'system'): void {
   if (typeof document === 'undefined') return;
@@ -48,12 +49,14 @@ export function EmbedBridge() {
     markEmbeddedFromQuery();
     if (isEmbeddedMode()) applyThemeFromParent();
 
+    const uninstallAuth = installEmbeddedNovaAuthIntercept();
     window.__novaEmbedIngest = ingestAndTheme;
     const queued = window.__novaEmbedQueue || [];
     window.__novaEmbedQueue = [];
     for (const item of queued) ingestAndTheme(item);
 
     return () => {
+      uninstallAuth();
       if (window.__novaEmbedIngest === ingestAndTheme) {
         window.__novaEmbedIngest = undefined;
       }
