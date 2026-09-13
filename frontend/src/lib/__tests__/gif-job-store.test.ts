@@ -167,7 +167,7 @@ describe('resolveGifGridSizeParams', () => {
     localStorage.clear();
   });
 
-  it('支持自定义尺寸的 gpt-image-2 保持现网网格', () => {
+  it('gpt-image-2 使用 OpenAI 合法横图 1536x1024，而不是 3264x2448', () => {
     enableEmbeddedModeForTests({ configReceived: true });
     ingestParentStudioMessage(parentConfig({
       image: {
@@ -178,14 +178,16 @@ describe('resolveGifGridSizeParams', () => {
     }));
     const modelId = getGifCompatibleModels()[0]?.value;
     expect(modelId).toBeTruthy();
+    expect(GIF_GRID_CUSTOM_SIZE).toBe('1536x1024');
     expect(resolveGifGridSizeParams(modelId)).toEqual({
       outputSize: GIF_GRID_OUTPUT_SIZE,
-      customSize: GIF_GRID_CUSTOM_SIZE,
+      customSize: '1536x1024',
       aspectRatio: GIF_GRID_ASPECT_RATIO,
     });
+    expect(resolveGifGridSizeParams(modelId).customSize).not.toBe('3264x2448');
   });
 
-  it('gpt-image-2.5 走自定义尺寸网格', () => {
+  it('gpt-image-2.5 同样走 1536x1024，而不是 3264x2448', () => {
     enableEmbeddedModeForTests({ configReceived: true });
     ingestParentStudioMessage(parentConfig({
       image: {
@@ -195,7 +197,8 @@ describe('resolveGifGridSizeParams', () => {
       },
     }));
     const modelId = getGifCompatibleModels()[0]?.value;
-    expect(resolveGifGridSizeParams(modelId).customSize).toBe(GIF_GRID_CUSTOM_SIZE);
+    expect(resolveGifGridSizeParams(modelId).customSize).toBe('1536x1024');
+    expect(resolveGifGridSizeParams(modelId).customSize).not.toBe('3264x2448');
     expect(resolveGifGridSizeParams(modelId).outputSize).toBe(GIF_GRID_OUTPUT_SIZE);
   });
 

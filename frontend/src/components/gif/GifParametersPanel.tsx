@@ -264,7 +264,7 @@ export function GifParametersPanel(props: GifParametersPanelProps) {
           </div>
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          支持自定义分辨率的模型会按 3264×2448 出 3×4 网格；其他模型使用其声明的最大输出档位。
+          OpenAI 动图按 1536×1024 出 4×3 网格；其他模型使用其声明的最大输出档位。
         </p>
       </div>
     </div>

@@ -9,19 +9,32 @@ const BASE = {
 } as const;
 
 describe('buildGifPrompt', () => {
-  it('openai/gpt-image-2 路径：有 customSize 时仍含 3264x2448 和 816x816', () => {
+  it('openai/gpt-image-2 路径：customSize 1536x1024 时不点名 3264/816，仍铺满 4×3', () => {
+    const prompt = buildGifPrompt({
+      ...BASE,
+      customSize: '1536x1024',
+      outputSize: '2K',
+    });
+    expect(prompt).not.toContain('3264');
+    expect(prompt).not.toContain('816x816');
+    expect(prompt).not.toContain('exactly 3264');
+    expect(prompt).not.toContain('exactly 1536x1024');
+    expect(prompt).toContain('4 columns');
+    expect(prompt).toContain('3 rows');
+    expect(prompt).toContain('4列3行');
+    expect(prompt).toContain('2K');
+  });
+
+  it('误传 3264x2448 时仍走铺满画布，不把非法 size 写进提示词', () => {
     const prompt = buildGifPrompt({
       ...BASE,
       customSize: '3264x2448',
       outputSize: '2K',
     });
-    expect(prompt).toContain('3264x2448');
-    expect(prompt).toContain('816x816');
+    expect(prompt).not.toContain('3264');
+    expect(prompt).not.toContain('816x816');
     expect(prompt).toContain('4 columns');
     expect(prompt).toContain('3 rows');
-    expect(prompt).toContain('4列3行');
-    expect(prompt).toContain('exactly 3264x2448');
-    expect(prompt).toContain('exactly 816x816');
   });
 
   it('grok 路径：无 customSize 时不含 3264/816x816，仍含 4 columns / 3 rows', () => {

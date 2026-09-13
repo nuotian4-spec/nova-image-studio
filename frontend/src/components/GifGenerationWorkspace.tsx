@@ -526,7 +526,7 @@ export function GifGenerationWorkspace({ wideMode = false, hasApiKey, onConfigur
 
       <p className="text-xs text-muted-foreground leading-relaxed">
         系统会把提示词编排成 3×4 = 12 帧的网格底图，再在本地切片合成 GIF。
-        支持自定义分辨率的模型会按 3264×2448 出网格；其他模型使用其声明的最大输出档位。
+        OpenAI 动图按 1536×1024 出 4×3 网格；其他模型使用其声明的最大输出档位。
       </p>
 
       {previewOpen && workflow.gridImageUrl && createPortal(

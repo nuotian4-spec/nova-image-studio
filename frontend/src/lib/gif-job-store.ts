@@ -41,7 +41,8 @@ export const GIF_DEFAULT_FRAME_DELAY_MS = 120;
 export const GIF_DEFAULT_LOOP_COUNT = 0;
 export const GIF_DEFAULT_FRAME_PADDING = 1.5;
 export const GIF_MAX_FRAME_PADDING = 5;
-export const GIF_GRID_CUSTOM_SIZE = '3264x2448';
+/** OpenAI Images 合法横图；禁止再用 3264x2448（上游不认）。 */
+export const GIF_GRID_CUSTOM_SIZE = '1536x1024';
 export const GIF_GRID_OUTPUT_SIZE = '2K' as const;
 export const GIF_GRID_ASPECT_RATIO = '4:3' as const;
 export const GIF_GRID_COLS = 4;
@@ -142,7 +143,7 @@ function toGifGridOutputSize(maxOutputSize: string | undefined): GifGridOutputSi
   return '1K';
 }
 
-/** 自定义尺寸模型沿用现网网格；其余模型不传 customSize，改用声明的最大输出档。 */
+/** OpenAI 自定义尺寸模型用官方合法横图；其余模型不传 customSize，改用声明的最大输出档。 */
 export function resolveGifGridSizeParams(modelId: string): GifGridSizeParams {
   const model = findCompleteImageModel(modelId);
   const capabilityId = model?.id || modelId;

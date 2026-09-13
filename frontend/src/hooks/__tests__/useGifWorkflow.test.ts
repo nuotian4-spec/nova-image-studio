@@ -5,7 +5,6 @@ import { enableEmbeddedModeForTests, resetEmbedRuntimeForTests } from '@/lib/emb
 import { createNovaTask } from '@/lib/ccode-task-client';
 import {
   GIF_GRID_ASPECT_RATIO,
-  GIF_GRID_CUSTOM_SIZE,
   GIF_GRID_OUTPUT_SIZE,
   getGifCompatibleModels,
   loadGifTemplate,
@@ -98,7 +97,7 @@ describe('useGifWorkflow.submitGrid 尺寸自适应', () => {
     localStorage.clear();
   });
 
-  it('gpt-image-2 提交仍带现网 customSize', async () => {
+  it('gpt-image-2 提交 customSize 为 1536x1024，prompt 不点名 3264/816', async () => {
     enableEmbeddedModeForTests({ configReceived: true });
     ingestParentStudioMessage(parentConfig({
       image: {
@@ -115,12 +114,13 @@ describe('useGifWorkflow.submitGrid 尺寸自适应', () => {
 
     expect(mockedCreateNovaTask).toHaveBeenCalledWith(expect.objectContaining({
       outputSize: GIF_GRID_OUTPUT_SIZE,
-      customSize: GIF_GRID_CUSTOM_SIZE,
+      customSize: '1536x1024',
       aspectRatio: GIF_GRID_ASPECT_RATIO,
     }));
-    const payload = mockedCreateNovaTask.mock.calls[0]?.[0] as { prompt?: string };
-    expect(payload.prompt).toContain('3264x2448');
-    expect(payload.prompt).toContain('816x816');
+    const payload = mockedCreateNovaTask.mock.calls[0]?.[0] as { prompt?: string; customSize?: string };
+    expect(payload.customSize).not.toBe('3264x2448');
+    expect(payload.prompt).not.toContain('3264');
+    expect(payload.prompt).not.toContain('816x816');
     expect(payload.prompt).toContain('4 columns');
     expect(payload.prompt).toContain('3 rows');
   });

@@ -33,14 +33,22 @@ function parseCustomSize(customSize: string): { width: number; height: number } 
   return { width, height };
 }
 
-/** 有 customSize 时沿用像素约束；否则只要求 4×3 铺满整张输出图，禁止点名 3264。 */
+/** OpenAI 合法 size 切不出整数正方形格时铺满画布；禁止点名 3264/816。 */
+function canConstrainExactSquarePanels(parsed: { width: number; height: number }): boolean {
+  if (parsed.width === 3264 && parsed.height === 2448) return false;
+  if (parsed.width % GRID_COLS !== 0 || parsed.height % GRID_ROWS !== 0) return false;
+  const panelWidth = parsed.width / GRID_COLS;
+  const panelHeight = parsed.height / GRID_ROWS;
+  return Number.isInteger(panelWidth) && Number.isInteger(panelHeight) && panelWidth === panelHeight;
+}
+
 function buildStructurePrefix(customSize?: string, outputSize?: GifPromptOutputSize): string {
   const parsed = customSize ? parseCustomSize(customSize) : null;
   let canvasLine: string;
   let panelLine: string;
   let keepLine: string;
 
-  if (parsed) {
+  if (parsed && canConstrainExactSquarePanels(parsed)) {
     const panelWidth = parsed.width / GRID_COLS;
     const panelHeight = parsed.height / GRID_ROWS;
     const canvasLabel = `${parsed.width}x${parsed.height}`;

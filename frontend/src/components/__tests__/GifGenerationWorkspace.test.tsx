@@ -103,6 +103,8 @@ describe('GifGenerationWorkspace 嵌入密钥误报', () => {
     expect(screen.getByText('生成网格图')).toBeInTheDocument();
     expect(screen.queryByText('父站还没有注入生图模型，请在「出图」栏选择密钥')).not.toBeInTheDocument();
     expect(screen.queryByText('父站未提供密钥')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/OpenAI 动图按 1536×1024 出 4×3 网格/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/3264/)).not.toBeInTheDocument();
   });
 
   it('先空 registry 渲染，再 apply 父站 gpt-image-2.5 后 options 非空', async () => {
