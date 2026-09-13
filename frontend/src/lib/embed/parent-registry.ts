@@ -125,7 +125,6 @@ export function buildRegistryFromParentConfig(config: ParentNovaStudioConfig): N
   const preferredTextId = config.text?.model
     ? textModels.find((model) => model.modelId === config.text?.model)?.id || textModels[0]?.id || ''
     : textModels[0]?.id || '';
-  const sliceImageId = imageModels.find((model) => model.protocol === 'openai')?.id || '';
 
   return {
     imageModels,
@@ -139,7 +138,7 @@ export function buildRegistryFromParentConfig(config: ParentNovaStudioConfig): N
       imageDescribe: preferredTextId,
       sliceDecomposition: preferredTextId,
       sliceReconstruct: preferredTextId,
-      sliceImageEdit: sliceImageId,
+      sliceImageEdit: preferredImageId,
     },
   };
 }

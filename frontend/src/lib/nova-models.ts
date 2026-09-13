@@ -71,8 +71,9 @@ export interface DefaultModels {
   sliceReconstruct: string;
   /**
    * 切图的图片编辑能力（AI 透明化、背景补齐）。
-   * 与 textToImage / imageToImage 分开配置，因为这两项要求上游支持
-   * 带 mask 的 /v1/images/edits，只有 openai 协议的模型满足（见 isSliceCapableImageModel）。
+   * 与 textToImage / imageToImage 分开配置；默认跟随当前出图模型。
+   * 嵌入态由父站当前分组注入。请求打 `/v1/images/edits`（含 mask），
+   * 由父站网关按密钥分组路由，不在选择器层按 protocol 预判。
    */
   sliceImageEdit: string;
 }
@@ -348,11 +349,12 @@ function ensureDefaults(raw: Partial<DefaultModels> | undefined, imageModels: Im
     if (!completeTextModels.some((model) => model.id === next[task])) next[task] = firstTextModelId;
   }
 
-  // 切图的图片编辑只能落在支持带 mask 编辑的模型上；没有这类模型时留空，
-  // 由 UI 提示用户去添加，而不是硬塞一个注定 400 的模型。
+  // 切图图片编辑跟随完整生图模型：优先沿用 textToImage，否则第一份完整配置。
   const sliceCapable = completeImageModels.filter(isSliceCapableImageModel);
   if (!sliceCapable.some((model) => model.id === next.sliceImageEdit)) {
-    next.sliceImageEdit = sliceCapable[0]?.id || '';
+    next.sliceImageEdit = (next.textToImage && sliceCapable.some((model) => model.id === next.textToImage))
+      ? next.textToImage
+      : (sliceCapable[0]?.id || firstImageModelId);
   }
 
   return next;
@@ -361,18 +363,17 @@ function ensureDefaults(raw: Partial<DefaultModels> | undefined, imageModels: Im
 /**
  * 该图片模型能否用于切图的图片编辑（AI 透明化 / 背景补齐）。
  *
- * 这两项都要打 `/v1/images/edits`，并且背景补齐还要传 `mask`。
- * 只有 openai 协议的模型有这个端点：Gemini 走 generateContent 没有 mask 语义，
- * Grok 的 edits 也不接受 mask 参数。所以在选择器层就把它们过滤掉，
- * 而不是等请求 400 才告诉用户。
+ * 切图编辑走父站网关 `/v1/images/edits`（含 mask）。Host 按密钥分组路由，
+ * OpenAI 与 Grok 都支持 mask edits。选择器只要求配置完整
+ * （apiKey / baseUrl / modelId），禁止按 `protocol === 'openai'` 预判死刑。
  */
 export function isSliceCapableImageModel(model: ImageModelConfig): boolean {
-  return model.protocol === 'openai';
+  return Boolean(model.apiKey?.trim() && model.baseUrl?.trim() && model.modelId?.trim());
 }
 
-/** 可用于切图图片编辑的模型列表。 */
+/** 可用于切图图片编辑的模型列表（= 配置完整的生图模型）。 */
 export function getSliceCapableImageModels(registry: NovaModelRegistry): ImageModelConfig[] {
-  return getCompleteImageModels(registry).filter(isSliceCapableImageModel);
+  return getCompleteImageModels(registry);
 }
 
 function getInitialRegistry(): NovaModelRegistry {

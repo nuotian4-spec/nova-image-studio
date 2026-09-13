@@ -30,6 +30,7 @@ import {
 } from "@/lib/plugin-schema";
 import { CanvasApiKeyMissingError } from "./canvas-generation-service";
 import { imageToDataUrl } from "./lib/image-storage";
+import { dataUrlToBlob } from "./lib/image-utils";
 import { mediaToFile } from "./lib/media-storage";
 import { initUploadProgress, updateUploadProgress } from "./lib/canvas-video-upload-store";
 import type { ReferenceImage } from "./types-media";
@@ -261,7 +262,7 @@ function extractVideoAsset(assets: PluginAsset[] | undefined): CanvasVideoGenera
   return { videoUrl: asset.url, posterUrl: asset.posterUrl, durationSec: asset.durationSec };
 }
 
-/** 画布图片引用 → File：先经 imageToDataUrl 统一取 dataUrl（storageKey/dataUrl/blob: 均有兜底），再 fetch 回 blob。 */
+/** 画布图片引用 → File：先经 imageToDataUrl 统一取 dataUrl，再用 atob 转 Blob（禁止 fetch(data:)，Host CSP 不含 data:）。 */
 async function resolveMediaFile(item: CanvasVideoMediaItem): Promise<File> {
   if (item.file) return item.file;
   // 画布视频/音频素材节点：文件本体在 IndexedDB（media-storage），刷新后依然可用
@@ -269,7 +270,7 @@ async function resolveMediaFile(item: CanvasVideoMediaItem): Promise<File> {
   const ref = item.referenceImage;
   if (!ref) throw new Error(`素材「${item.name}」缺少可上传的文件`);
   const dataUrl = await imageToDataUrl(ref);
-  const blob = await (await fetch(dataUrl)).blob();
+  const blob = dataUrlToBlob(dataUrl);
   return new File([blob], item.name, { type: blob.type || ref.type });
 }
 

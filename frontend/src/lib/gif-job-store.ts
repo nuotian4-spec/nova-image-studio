@@ -1,4 +1,3 @@
-import { isGptImageModel } from '@/lib/gemini-config';
 import type { RefImageData } from '@/lib/job-store';
 import { supportsCustomSize, type GptImageBackground, type GptImageQuality, type GptImageStyle } from '@/lib/model-capabilities';
 import { getDefaultImageModel, getCompleteImageModels, loadRegistry } from '@/lib/nova-models';
@@ -121,11 +120,51 @@ export function needsOverwriteConfirm(job: ActiveGifJob | null): boolean {
   return job.status !== 'idle';
 }
 
+export type GifGridOutputSize = '1K' | '2K' | '4K';
+
+export interface GifGridSizeParams {
+  outputSize: GifGridOutputSize;
+  customSize?: string;
+  aspectRatio: typeof GIF_GRID_ASPECT_RATIO;
+}
+
+function findCompleteImageModel(modelId: string) {
+  const models = getCompleteImageModels(loadRegistry());
+  return models.find((item) => item.id === modelId)
+    || models.find((item) => item.modelId === modelId)
+    || models.find((item) => item.name === modelId);
+}
+
+function toGifGridOutputSize(maxOutputSize: string | undefined): GifGridOutputSize {
+  if (maxOutputSize === '4K' || maxOutputSize === '2K' || maxOutputSize === '1K') {
+    return maxOutputSize;
+  }
+  return '1K';
+}
+
+/** 自定义尺寸模型沿用现网网格；其余模型不传 customSize，改用声明的最大输出档。 */
+export function resolveGifGridSizeParams(modelId: string): GifGridSizeParams {
+  const model = findCompleteImageModel(modelId);
+  const capabilityId = model?.id || modelId;
+  if (supportsCustomSize(capabilityId)) {
+    return {
+      outputSize: GIF_GRID_OUTPUT_SIZE,
+      customSize: GIF_GRID_CUSTOM_SIZE,
+      aspectRatio: GIF_GRID_ASPECT_RATIO,
+    };
+  }
+  return {
+    outputSize: toGifGridOutputSize(model?.maxOutputSize),
+    aspectRatio: GIF_GRID_ASPECT_RATIO,
+  };
+}
+
 export function getGifCompatibleModels(): { value: GifModel; label: string }[] {
   const registry = loadRegistry();
-  return getCompleteImageModels(registry)
-    .filter((model) => isGptImageModel(model.id) && supportsCustomSize(model.id) && model.maxOutputSize === '4K')
-    .map((model) => ({ value: model.id, label: model.name }));
+  return getCompleteImageModels(registry).map((model) => ({
+    value: model.id,
+    label: model.name,
+  }));
 }
 
 export function getDefaultGifModelId(): GifModel {

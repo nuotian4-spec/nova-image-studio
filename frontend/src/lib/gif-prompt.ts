@@ -1,13 +1,6 @@
-const STRUCTURE_PREFIX = `Create a strict animation sprite sheet, not a labeled contact sheet.
-
-Canvas: exactly 3264x2448 pixels.
-Grid: exactly 4 columns and 3 rows, 12 panels total.
-Each panel: exactly 816x816 pixels, square, edge-to-edge.
-Panel order: left to right, top to bottom: row 1 = frames 1-4, row 2 = frames 5-8, row 3 = frames 9-12.
-
-The grid must fill the entire canvas. No outer margin, no gutters, no spacing between panels, no rounded panels, no borders, no separators, no labels, no frame numbers, no text, no watermark, no annotations.
-Each panel contains exactly one frame of the same animation sequence.
-Keep the subject fully inside each 816x816 panel and centered on a stable anchor point.`;
+const GRID_COLS = 4;
+const GRID_ROWS = 3;
+const GRID_PANELS = GRID_COLS * GRID_ROWS;
 
 const TEMPLATE_LOGIC =
   'The first uploaded image is a layout template only: use it strictly to determine the 4x3 panel boundaries and panel sizes. Do not copy any visible guide lines, grid strokes, labels, numbers, colors, borders, frames, watermarks, or any other template artifacts into the final image.';
@@ -29,6 +22,51 @@ Frame 12 must transition smoothly back to frame 1 with the same small motion ste
 Do not make frame 12 a static duplicate of frame 1; frame 12 should be the natural frame immediately before frame 1 in the loop.
 The subject anchor point, scale, identity, lighting, and background must remain stable across the loop seam.`;
 
+export type GifPromptOutputSize = '1K' | '2K' | '4K';
+
+function parseCustomSize(customSize: string): { width: number; height: number } | null {
+  const match = /^(\d+)x(\d+)$/i.exec(customSize.trim());
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) return null;
+  return { width, height };
+}
+
+/** 有 customSize 时沿用像素约束；否则只要求 4×3 铺满整张输出图，禁止点名 3264。 */
+function buildStructurePrefix(customSize?: string, outputSize?: GifPromptOutputSize): string {
+  const parsed = customSize ? parseCustomSize(customSize) : null;
+  let canvasLine: string;
+  let panelLine: string;
+  let keepLine: string;
+
+  if (parsed) {
+    const panelWidth = parsed.width / GRID_COLS;
+    const panelHeight = parsed.height / GRID_ROWS;
+    const canvasLabel = `${parsed.width}x${parsed.height}`;
+    const panelLabel = `${panelWidth}x${panelHeight}`;
+    canvasLine = `Canvas: exactly ${canvasLabel} pixels.`;
+    panelLine = `Each panel: exactly ${panelLabel} pixels, square, edge-to-edge.`;
+    keepLine = `Keep the subject fully inside each ${panelLabel} panel and centered on a stable anchor point.`;
+  } else {
+    const sizeHint = outputSize ? ` (${outputSize})` : '';
+    canvasLine = `Canvas: fill the entire output image${sizeHint}.`;
+    panelLine = 'Each panel: a square that tiles the canvas edge-to-edge with no gaps.';
+    keepLine = 'Keep the subject fully inside each square panel and centered on a stable anchor point.';
+  }
+
+  return `Create a strict animation sprite sheet, not a labeled contact sheet.
+
+${canvasLine}
+Grid: exactly ${GRID_COLS} columns and ${GRID_ROWS} rows, ${GRID_PANELS} panels total.
+${panelLine}
+Panel order: left to right, top to bottom: row 1 = frames 1-4, row 2 = frames 5-8, row 3 = frames 9-12.
+
+The grid must fill the entire canvas. No outer margin, no gutters, no spacing between panels, no rounded panels, no borders, no separators, no labels, no frame numbers, no text, no watermark, no annotations.
+Each panel contains exactly one frame of the same animation sequence.
+${keepLine}`;
+}
+
 function buildChineseRefIntro(refImageCount: number): string {
   const templatePart =
     '图一是gif平面图布局模板，仅用于确定4列3行的网格切片边界，禁止把模板中的引导线、网格线、编号、边框、底色等元素画进最终图像';
@@ -49,6 +87,8 @@ export interface BuildGifPromptInput {
   refImageCount: number;
   loop: boolean;
   closedLoop: boolean;
+  customSize?: string;
+  outputSize?: GifPromptOutputSize;
 }
 
 export function buildGifPrompt(input: BuildGifPromptInput): string {
@@ -58,8 +98,9 @@ export function buildGifPrompt(input: BuildGifPromptInput): string {
   const chineseIntro = buildChineseRefIntro(input.refImageCount);
   const refSegment = hasRefs ? `\n\n${REF_LOGIC}` : '';
   const loopSegment = input.closedLoop ? CLOSED_LOOP_LOGIC : NON_LOOP_LOGIC;
+  const structurePrefix = buildStructurePrefix(input.customSize, input.outputSize);
 
-  const englishBody = `${STRUCTURE_PREFIX}\n\n${TEMPLATE_LOGIC}${refSegment}\n\n${STYLE_LOGIC}\n\nUser intent: ${cleanedUser}\n\n${loopSegment}`;
+  const englishBody = `${structurePrefix}\n\n${TEMPLATE_LOGIC}${refSegment}\n\n${STYLE_LOGIC}\n\nUser intent: ${cleanedUser}\n\n${loopSegment}`;
 
   return `${chineseIntro}\n\n${englishBody}`;
 }

@@ -66,7 +66,8 @@ interface PersistedSettings {
 
 export function GifGenerationWorkspace({ wideMode = false, hasApiKey, onConfigureApiKey, onError, showToast }: GifGenerationWorkspaceProps) {
   const workflow = useGifWorkflow();
-  const gifModelOptions = useMemo(() => getGifCompatibleModels(), []);
+  // iframe keepMounted 会在 registry 为空时先挂载；父站 postMessage 后必须重算，不能冻在空依赖上。
+  const [gifModelOptions, setGifModelOptions] = useState(getGifCompatibleModels);
 
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState<GifModel>(getDefaultGifModelId());
@@ -141,6 +142,20 @@ export function GifGenerationWorkspace({ wideMode = false, hasApiKey, onConfigur
     setOptimizedText('');
     setOptimizeError(null);
   }, [optimizedText]);
+
+  useEffect(() => {
+    const refreshGifModels = () => {
+      const options = getGifCompatibleModels();
+      setGifModelOptions(options);
+      setModel((current) => {
+        if (options.some((option) => option.value === current)) return current;
+        return getDefaultGifModelId() || options[0]?.value || '';
+      });
+    };
+    refreshGifModels();
+    window.addEventListener('nova-model-registry-updated', refreshGifModels);
+    return () => window.removeEventListener('nova-model-registry-updated', refreshGifModels);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -335,17 +350,16 @@ export function GifGenerationWorkspace({ wideMode = false, hasApiKey, onConfigur
       setMissingKeyOpen(true);
       return;
     }
+    if (gifModelOptions.length === 0) {
+      return;
+    }
     try {
       await workflow.submitGrid(submitInput);
     } catch (error) {
       const message = error instanceof Error ? error.message : '提交失败';
-      if (message === '请先配置 API 密钥') {
-        setMissingKeyOpen(true);
-      } else {
-        onError(message);
-      }
+      onError(message);
     }
-  }, [hasApiKey, onError, submitInput, workflow]);
+  }, [gifModelOptions.length, hasApiKey, onError, submitInput, workflow]);
 
   const handleSubmitClick = useCallback(() => {
     if (!prompt.trim()) return;
@@ -470,6 +484,7 @@ export function GifGenerationWorkspace({ wideMode = false, hasApiKey, onConfigur
           canSubmit={canSubmit}
           onSubmit={handleSubmitClick}
           onConfigureApiKey={() => setMissingKeyOpen(true)}
+          onOpenSettings={onConfigureApiKey}
           onOptimize={handleOptimize}
           onClear={handleClearClick}
         />
@@ -510,9 +525,8 @@ export function GifGenerationWorkspace({ wideMode = false, hasApiKey, onConfigur
       </div>
 
       <p className="text-xs text-muted-foreground leading-relaxed">
-        系统会自动把生成网格图并切片为GIF，搭配你填写的主题与可选的参考图，生成 3×4 = 12 帧的网格底图，再在本地切片合成 GIF。
-        网格图分辨率固定为 3264×2448（单帧 816×816 正方形），仅显示支持 4K 自定义分辨率的 image 系列模型。
-        banana 系列不支持当前动图网格所需的自定义分辨率，因此这里不提供选择。
+        系统会把提示词编排成 3×4 = 12 帧的网格底图，再在本地切片合成 GIF。
+        支持自定义分辨率的模型会按 3264×2448 出网格；其他模型使用其声明的最大输出档位。
       </p>
 
       {previewOpen && workflow.gridImageUrl && createPortal(

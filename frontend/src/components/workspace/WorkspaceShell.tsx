@@ -55,7 +55,7 @@ import { isEmbeddedMode } from '@/lib/embed/mode';
 
 export function WorkspaceShell() {
   const queueStatus = useQueueStatus();
-  const { wideMode, toggleWideMode } = useWideMode();
+  const { wideMode, toggleWideMode, setWideMode } = useWideMode();
   const embed = useEmbedRuntime();
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 设置弹层打开时停在哪一页。插件凭据的提示条要直达插件页，其余入口都回到模型配置。 */
@@ -109,6 +109,30 @@ export function WorkspaceShell() {
       setActiveTab('image-generation');
     }
   }, [activeTab, embed.hideVideo]);
+
+  // 嵌入 iframe 经常 <1280，toggleWideMode 会静默失败。进入切图 tab 时尝试开宽屏；
+  // 失败则由 SliceWorkspace 继续渲染可滚动工作区，而不是整页挡门。
+  useEffect(() => {
+    if (!embed.enabled || activeTab !== 'image-to-slice') return;
+    setWideMode(true);
+  }, [activeTab, embed.enabled, setWideMode]);
+
+  const handleSliceConfigureApiKey = useCallback(() => {
+    if (embed.enabled) return;
+    openSettings();
+  }, [embed.enabled, openSettings]);
+
+  const handleSliceEnableWideMode = useCallback(() => {
+    if (wideMode) return;
+    const ok = setWideMode(true);
+    if (ok) return;
+    showToast(
+      embed.enabled
+        ? '当前窗口宽度不足 1280px。布局较挤，可用父站「新窗口打开」。'
+        : '当前窗口宽度不足 1280px，无法切换宽屏模式。',
+      'info',
+    );
+  }, [embed.enabled, setWideMode, showToast, wideMode]);
 
   const handleImageDraftConsumed = useCallback(() => {
     workspace.setRetryData(null);
@@ -462,8 +486,8 @@ export function WorkspaceShell() {
                 {embed.enabled && !workspace.hasTextKey && <div className="mb-3"><EmbedCapabilityNotice kind="text" /></div>}
                 <SliceWorkspace
                   wideMode={wideMode}
-                  onConfigureApiKey={() => openSettings()}
-                  onEnableWideMode={() => { if (!wideMode) toggleWideMode(); }}
+                  onConfigureApiKey={handleSliceConfigureApiKey}
+                  onEnableWideMode={handleSliceEnableWideMode}
                   showToast={showToast}
                 />
               </TabsContent>

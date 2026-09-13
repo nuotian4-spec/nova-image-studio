@@ -3,7 +3,7 @@
 import localforage from "localforage";
 
 import { nanoid } from "nanoid";
-import { readImageMeta } from "./image-utils";
+import { dataUrlToBlob, readImageMeta } from "./image-utils";
 
 export type UploadedImage = {
   url: string;
@@ -19,7 +19,7 @@ const objectUrls = new Map<string, string>();
 
 /** 本地存储图片 blob（命名沿用 uploadImage，但全程纯前端 IndexedDB，不上传服务端）。 */
 export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
-  const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
+  const blob = typeof input === "string" ? dataUrlToBlob(input) : input;
   const storageKey = `image:${nanoid()}`;
   await store.setItem(storageKey, blob);
   const url = URL.createObjectURL(blob);

@@ -149,10 +149,11 @@ function normalizeDefaults(
     imageDescribe: completeTextModels.some((model) => model.id === defaults.imageDescribe) ? defaults.imageDescribe : firstTextModelId,
     sliceDecomposition: completeTextModels.some((model) => model.id === defaults.sliceDecomposition) ? defaults.sliceDecomposition : firstTextModelId,
     sliceReconstruct: completeTextModels.some((model) => model.id === defaults.sliceReconstruct) ? defaults.sliceReconstruct : firstTextModelId,
-    // 切图的图片编辑只能落在 openai 协议模型上；没有这类模型时留空并在切图页提示
     sliceImageEdit: sliceCapableImageModels.some((model) => model.id === defaults.sliceImageEdit)
       ? defaults.sliceImageEdit
-      : (sliceCapableImageModels[0]?.id || ''),
+      : (sliceCapableImageModels.some((model) => model.id === defaults.textToImage)
+        ? defaults.textToImage
+        : (sliceCapableImageModels[0]?.id || firstImageModelId)),
   };
 }
 
@@ -413,7 +414,6 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
 
   const completeImageOptions = imageModels.filter(isCompleteImageModel).map((model) => ({ value: model.id, label: model.name }));
   const completeTextOptions = textModels.filter(isCompleteTextModel).map((model) => ({ value: model.id, label: model.name }));
-  // 切图的图片编辑只能落在 openai 协议模型上（带 mask 的 /v1/images/edits）
   const sliceCapableImageOptions = imageModels
     .filter((model) => isCompleteImageModel(model) && isSliceCapableImageModel(model))
     .map((model) => ({ value: model.id, label: model.name }));
@@ -771,8 +771,8 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, initialTab = 'm
                   <Select value={defaults.sliceImageEdit} onValueChange={(value) => setDefaults((prev) => ({ ...prev, sliceImageEdit: value }))} options={sliceCapableImageOptions} />
                   <p className="text-[11px] text-muted-foreground">
                     {sliceCapableImageOptions.length === 0
-                      ? '需要一个 OpenAI 协议的图片模型；Gemini / Grok 不支持带蒙版的局部编辑'
-                      : 'AI 透明化与背景补齐使用，仅支持 OpenAI 协议'}
+                      ? '请先添加一个配置完整的图片模型'
+                      : 'AI 透明化与背景补齐使用，跟随当前生图模型'}
                   </p>
                 </div>
               </div>

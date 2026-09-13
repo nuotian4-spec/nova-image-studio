@@ -106,20 +106,20 @@ export function useWideMode() {
     syncHtmlAttribute(wideMode);
   }, [wideMode]);
 
-  const setWideMode = useCallback((enabled: boolean) => {
-    if (enabled && !viewportAllowsWide()) return;
+  const setWideMode = useCallback((enabled: boolean): boolean => {
+    if (enabled && !viewportAllowsWide()) return false;
     setWideModeState(enabled);
     writeStoredWideMode(enabled);
+    return true;
   }, []);
 
-  const toggleWideMode = useCallback(() => {
-    setWideModeState(current => {
-      const next = !current;
-      if (next && !viewportAllowsWide()) return current;
-      writeStoredWideMode(next);
-      return next;
-    });
-  }, []);
+  const toggleWideMode = useCallback((): boolean => {
+    const next = !wideMode;
+    if (next && !viewportAllowsWide()) return false;
+    setWideModeState(next);
+    writeStoredWideMode(next);
+    return true;
+  }, [wideMode]);
 
   return {
     wideMode,

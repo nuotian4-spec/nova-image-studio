@@ -13,11 +13,9 @@ import {
 } from '@/lib/image-downloader';
 import type { RefImageData } from '@/lib/job-store';
 import {
-  GIF_GRID_ASPECT_RATIO,
-  GIF_GRID_CUSTOM_SIZE,
-  GIF_GRID_OUTPUT_SIZE,
   loadActiveGifJob,
   loadGifTemplate,
+  resolveGifGridSizeParams,
   saveActiveGifJob,
   type ActiveGifJob,
   type GifStatus,
@@ -301,11 +299,14 @@ export function useGifWorkflow(): UseGifWorkflowResult {
       style: input.gptImageStyle,
       background: input.gptImageBackground,
     });
+    const sizeParams = resolveGifGridSizeParams(input.model);
     const finalPrompt = buildGifPrompt({
       userPrompt: input.prompt,
       refImageCount: refsForSubmit.length,
       loop: input.loop,
       closedLoop: input.closedLoop,
+      customSize: sizeParams.customSize,
+      outputSize: sizeParams.outputSize,
     });
 
     const next: ActiveGifJob = {
@@ -338,9 +339,8 @@ export function useGifWorkflow(): UseGifWorkflowResult {
         protocol: provider.protocol,
         mode: 'image-to-image',
         prompt: finalPrompt,
-        outputSize: GIF_GRID_OUTPUT_SIZE,
-        customSize: GIF_GRID_CUSTOM_SIZE,
-        aspectRatio: GIF_GRID_ASPECT_RATIO,
+        outputSize: sizeParams.outputSize,
+        aspectRatio: sizeParams.aspectRatio,
         temperature: 1,
         model: provider.modelId,
         gptImageQuality: advancedParams.quality,
@@ -348,6 +348,7 @@ export function useGifWorkflow(): UseGifWorkflowResult {
         gptImageBackground: advancedParams.background,
         parallelCount: 1,
         images: buildImageReferences(template, refsForSubmit),
+        ...(sizeParams.customSize ? { customSize: sizeParams.customSize } : {}),
       });
 
       const withTaskId: ActiveGifJob = { ...next, serverTaskId, updatedAt: nowIso() };

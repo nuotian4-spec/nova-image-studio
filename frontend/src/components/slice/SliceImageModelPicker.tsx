@@ -5,14 +5,21 @@
 // 闭源版用的是全局 ModelPickerList（内置模型族 + 档位二级菜单），开源版没有
 // 「模型族」概念——模型全由用户在设置里自建，所以这里就是一个平铺列表。
 //
-// 只列 openai 协议的模型：切图的 AI 透明化与背景补齐都要打 /v1/images/edits，
-// 背景补齐还要传 mask，Gemini 与 Grok 都没有这个语义。与其让用户选完再收 400，
-// 不如在这里就只给出可用项，并在空列表时说清该去配什么。
+// 列出配置完整的生图模型：切图的 AI 透明化与背景补齐打 /v1/images/edits（含 mask），
+// 由父站网关按当前出图分组路由，不在选择器层按 protocol 过滤。
+//
+// 嵌入模式下父站 postMessage 会改 registry：必须订阅更新，不能 useMemo([],) 把列表算死。
 
+import { useMemo, useSyncExternalStore } from 'react';
 import { Check } from 'lucide-react';
 
+import { getEmbedRuntimeState, isEmbeddedMode, subscribeEmbedRuntime } from '@/lib/embed/mode';
 import { cn } from '@/lib/utils';
-import { listSliceImageModels, type SliceImageModel } from '@/lib/slice-model-config';
+import {
+  EMBED_SLICE_IMAGE_MISSING_HINT,
+  listSliceImageModels,
+  type SliceImageModel,
+} from '@/lib/slice-model-config';
 
 interface SliceImageModelPickerProps {
   /** 当前选中的 registry 条目 id */
@@ -21,20 +28,39 @@ interface SliceImageModelPickerProps {
   className?: string;
 }
 
-export function SliceImageModelPicker({ value, onSelect, className }: SliceImageModelPickerProps) {
+function getSliceImageModelsSignature(): string {
+  const embed = getEmbedRuntimeState();
   const models = listSliceImageModels();
+  return JSON.stringify({
+    embedded: embed.enabled || isEmbeddedMode(),
+    revision: embed.revision,
+    memory: embed.memoryRegistry?.imageModels.map((model) => `${model.id}:${model.protocol}`),
+    ids: models.map((model) => model.id),
+  });
+}
+
+export function SliceImageModelPicker({ value, onSelect, className }: SliceImageModelPickerProps) {
+  const signature = useSyncExternalStore(
+    subscribeEmbedRuntime,
+    getSliceImageModelsSignature,
+    () => '[]',
+  );
+  const models = useMemo(() => listSliceImageModels(), [signature]);
 
   if (models.length === 0) {
+    if (isEmbeddedMode()) {
+      return (
+        <div className={cn('p-3 text-xs leading-relaxed text-muted-foreground', className)}>
+          {EMBED_SLICE_IMAGE_MISSING_HINT}
+        </div>
+      );
+    }
     return (
       <div className={cn('p-3 text-xs leading-relaxed text-muted-foreground', className)}>
         还没有可用于切图的图片模型。
         <br />
-        请到「设置 → 模型」添加一个 <span className="text-foreground">OpenAI 协议</span>
-        的图片模型（如 GPT Image 2）。
-        <br />
-        <span className="text-[11px] opacity-80">
-          Gemini 与 Grok 协议不支持带蒙版的局部编辑，因此不在此列出。
-        </span>
+        {/* 独立站空态。嵌入模式已在上方分支返回，禁止把用户骗去 BYOK 设置。 */}
+        请到「设置 → 模型」添加一个配置完整的图片模型。
       </div>
     );
   }

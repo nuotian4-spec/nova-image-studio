@@ -32,7 +32,7 @@ import {
   loadJsonFromStorage,
   saveJsonToStorage,
 } from '@/lib/settings-storage';
-import { hasSliceImageModel, hasSliceTextModel } from '@/lib/slice-model-config';
+import { hasSliceImageModel, hasSliceTextModel, reportSliceCapabilityGap } from '@/lib/slice-model-config';
 import {
   describeSliceImageModel,
   SliceImageModelPicker,
@@ -1212,13 +1212,11 @@ export function SliceEditor({ onConfigureApiKey, showToast, onTaskStateChange }:
       if (!ws || !asset) return;
       // AI 透明化打图片编辑端点，AI SVG 打文本模型 —— 两者缺的东西不同，分别提示
       if (op === 'aiTransparent' ? !hasSliceImageModel() : !hasSliceTextModel('sliceDecomposition')) {
-        showToast(
-          op === 'aiTransparent'
-            ? '请先在设置中添加一个 OpenAI 协议的图片模型'
-            : '请先在设置中为「AI 拆图」指定文本模型',
-          'error',
-        );
-        onConfigureApiKey();
+        reportSliceCapabilityGap({
+          kind: op === 'aiTransparent' ? 'image' : 'sliceDecomposition',
+          showToast,
+          onConfigureApiKey,
+        });
         return;
       }
 
@@ -1329,8 +1327,11 @@ export function SliceEditor({ onConfigureApiKey, showToast, onTaskStateChange }:
     const ws = useSliceStore.getState().activeWorkspace;
     if (!ws) return;
     if (!hasSliceTextModel('sliceDecomposition')) {
-      showToast('请先在「设置 → 模型」中为「AI 拆图」指定文本模型', 'error');
-      onConfigureApiKey();
+      reportSliceCapabilityGap({
+        kind: 'sliceDecomposition',
+        showToast,
+        onConfigureApiKey,
+      });
       return;
     }
     const img = sourceImgRef.current;

@@ -26,6 +26,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { getAssetBlob, type ImageAsset } from '@/lib/asset-store';
+import { isEmbeddedMode } from '@/lib/embed/mode';
+import { cn } from '@/lib/utils';
 import { getBlob } from '@/lib/slice-db';
 import { describeSourceImageSizeError } from '@/lib/slice-geometry';
 import {
@@ -242,8 +244,12 @@ export function SliceWorkspace({ wideMode, onConfigureApiKey, onEnableWideMode, 
     }
   };
 
-  // 切图仅在宽屏模式下可用（与无限画布一致），以降低适配成本。
-  if (!wideMode) {
+  const embedded = isEmbeddedMode();
+  const crampedEmbed = embedded && !wideMode;
+
+  // 独立站切图仍要求宽屏（与无限画布一致）。嵌入 iframe 经常 <1280，
+  // 宽屏按钮还会因 viewport 不足静默失败，所以嵌入态不再整页挡门。
+  if (!wideMode && !embedded) {
     return (
       <div className="grid place-items-center rounded-2xl border border-dashed border-border py-20">
         <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center">
@@ -259,6 +265,15 @@ export function SliceWorkspace({ wideMode, onConfigureApiKey, onEnableWideMode, 
     );
   }
 
+  const crampedNotice = crampedEmbed ? (
+    <div
+      role="status"
+      className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-900 dark:text-amber-200"
+    >
+      布局较挤，可用父站「新窗口打开」。
+    </div>
+  ) : null;
+
   if (activeWorkspaceId) {
     const visibleAssets = activeWorkspace?.assets.filter((asset) => !asset.hidden) ?? [];
     const hasIncompleteAiAsset = visibleAssets.some(
@@ -273,7 +288,8 @@ export function SliceWorkspace({ wideMode, onConfigureApiKey, onEnableWideMode, 
       !hasIncompleteAiAsset &&
       !hasMissingAssetBlob;
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col gap-3', crampedEmbed && 'overflow-auto')}>
+        {crampedNotice}
         {/* 工作区工具栏：返回入口与子 tab 固定在同一位置，两个页面切换时不再跳动。 */}
         <div className="flex shrink-0 items-center gap-2">
           <Button variant="ghost" size="sm" onClick={closeWorkspace}>
@@ -358,7 +374,8 @@ export function SliceWorkspace({ wideMode, onConfigureApiKey, onEnableWideMode, 
   }
 
   return (
-    <div className="space-y-4">
+    <div className={cn('space-y-4', crampedEmbed && 'overflow-auto')}>
+      {crampedNotice}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="text-lg font-semibold tracking-tight">UI设计模式</h2>

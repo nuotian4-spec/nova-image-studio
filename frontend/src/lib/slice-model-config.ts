@@ -7,9 +7,10 @@
 // 因此调用处必须拿到一整份配置。这个文件就是把 registry 的形状收敛成
 // 切图各处需要的两个结构：SliceTextModel 与 SliceImageModel。
 //
-// 另有一处开源版特有的约束：切图的图片编辑（AI 透明化 / 背景补齐）需要
-// 带 mask 的 /v1/images/edits，只有 openai 协议的模型有；见 isSliceCapableImageModel。
+// 切图的图片编辑（AI 透明化 / 背景补齐）走 `/v1/images/edits`（含 mask）。
+// Host 按密钥分组路由，选择器只要求生图模型配置完整，不按 protocol 过滤。
 
+import { isEmbeddedMode } from '@/lib/embed/mode';
 import { normalizeModelBaseUrl, normalizeTextModelBaseUrl } from '@/lib/model-endpoints';
 import {
   getDefaultImageModel,
@@ -51,6 +52,40 @@ const TASK_LABELS: Record<SliceTextTask, string> = {
   sliceReconstruct: '网页复刻',
 };
 
+/** 嵌入模式：一个生图模型都没有时，指引去父站出图栏选密钥。 */
+export const EMBED_SLICE_IMAGE_MISSING_HINT =
+  '请在父站「出图」栏选择可用的生图密钥后再使用 AI 透明化 / 背景补齐。';
+
+export function describeSliceImageModelMissing(): string {
+  if (isEmbeddedMode()) return EMBED_SLICE_IMAGE_MISSING_HINT;
+  return '请先在「设置 → 模型」中添加一个配置完整的图片模型后再使用切图的 AI 图片编辑。';
+}
+
+export function describeSliceTextModelMissing(task: SliceTextTask): string {
+  if (isEmbeddedMode()) {
+    return `请在父站「Agent / 对话」栏选择可用的文本密钥后再使用「${TASK_LABELS[task]}」。`;
+  }
+  return `请先在「设置 → 模型」中为「${TASK_LABELS[task]}」指定一个配置完整的文本模型`;
+}
+
+/**
+ * UI 缺能力时的统一出口：toast + 独立站才打开设置。
+ * 嵌入模式 hideByokSettings，打开设置填不了 Key，也不应弹出 MissingApiKeyDialog。
+ */
+export function reportSliceCapabilityGap(params: {
+  kind: 'image' | SliceTextTask;
+  showToast: (message: string, type: 'success' | 'error' | 'info') => void;
+  onConfigureApiKey?: () => void;
+}): void {
+  const message = params.kind === 'image'
+    ? describeSliceImageModelMissing()
+    : describeSliceTextModelMissing(params.kind);
+  params.showToast(message, 'error');
+  if (!isEmbeddedMode()) {
+    params.onConfigureApiKey?.();
+  }
+}
+
 /**
  * 取某个切图文本任务的默认模型。
  * @throws 未配置完整时抛出可直接展示的中文错误
@@ -59,9 +94,7 @@ export function requireSliceTextModel(task: SliceTextTask): SliceTextModel {
   const registry = loadRegistry();
   const configured = getDefaultTextModel(registry, task);
   if (!configured?.apiKey || !configured.baseUrl || !configured.modelId) {
-    throw new Error(
-      `请先在「设置 → 模型」中为「${TASK_LABELS[task]}」指定一个配置完整的文本模型`,
-    );
+    throw new Error(describeSliceTextModelMissing(task));
   }
   return {
     protocol: configured.protocol,
@@ -118,10 +151,7 @@ export function requireSliceImageModel(preferredId?: string | null): SliceImageM
   const first = getSliceCapableImageModels(registry)[0];
   if (first) return toSliceImageModel(first);
 
-  throw new Error(
-    '切图的 AI 图片编辑需要一个 OpenAI 协议的图片模型（如 GPT Image 2）。'
-    + '请先在「设置 → 模型」中添加，Gemini 与 Grok 协议不支持带蒙版的局部编辑。',
-  );
+  throw new Error(describeSliceImageModelMissing());
 }
 
 /** UI 用：当前是否存在可做切图图片编辑的模型。 */

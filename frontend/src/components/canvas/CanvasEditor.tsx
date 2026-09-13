@@ -66,7 +66,7 @@ import {
   isInvalidPromptRouteSelection,
   MANUAL_PROMPT_ROUTE_VALUE,
 } from "./lib/canvas-prompt-routes";
-import { compressReferenceDataUrl, readFileAsDataUrl } from "./lib/image-utils";
+import { compressReferenceDataUrl, dataUrlToBlob } from "./lib/image-utils";
 import { CanvasNodeType, type CanvasConnection, type CanvasGenerationConfig, type CanvasInteractionMode, type CanvasNodeData, type CanvasNodeMetadata, type ContextMenuState, type ConnectionHandle, type Position, type SelectionBox, type ViewportTransform } from "./types";
 import type { ReferenceImage } from "./types-media";
 import { PromptOptimizeDialog } from "@/components/PromptOptimizeDialog";
@@ -778,8 +778,7 @@ export function CanvasEditor({ projectId, onBack, onRequireApiKey, showToast, sh
       let offset = 0;
       for (const file of images) {
         try {
-          const dataUrl = await readFileAsDataUrl(file);
-          const stored = await uploadImage(dataUrl);
+          const stored = await uploadImage(file);
           const size = fitNodeSize(stored.width, stored.height, 320, 320);
           const node = createImageNode({ x: base.x + offset, y: base.y + offset }, { metadata: storedToMetadata(stored), width: size.width, height: size.height });
           setNodes((prev) => [...prev, node]);
@@ -1058,7 +1057,8 @@ export function CanvasEditor({ projectId, onBack, onRequireApiKey, showToast, sh
         let blob: Blob | null = key ? await getImageBlob(key) : null;
         if (!blob) {
           const url = nodeImageUrl(node);
-          if (url) blob = await (await fetch(url)).blob();
+          if (url?.startsWith("data:")) blob = dataUrlToBlob(url);
+          else if (url) blob = await (await fetch(url)).blob();
         }
         if (!blob) {
           showToast("无法读取图片", "error");
@@ -2004,8 +2004,7 @@ export function CanvasEditor({ projectId, onBack, onRequireApiKey, showToast, sh
       const selectedImageNodes = nodes.filter((node) => node.type === CanvasNodeType.Image && selectedIds.includes(node.id));
       void (async () => {
         try {
-          const dataUrl = await readFileAsDataUrl(file);
-          const stored = await uploadImage(dataUrl);
+          const stored = await uploadImage(file);
           if (selectedImageNodes.length === 1) {
             fillNodeWithConfirm(selectedImageNodes[0].id, stored);
             return;
@@ -2457,8 +2456,7 @@ export function CanvasEditor({ projectId, onBack, onRequireApiKey, showToast, sh
               if (file) {
                 void (async () => {
                   try {
-                    const dataUrl = await readFileAsDataUrl(file);
-                    const stored = await uploadImage(dataUrl);
+                    const stored = await uploadImage(file);
                     fillNodeWithConfirm(targetId, stored);
                   } catch {
                     showToast("图片读取失败", "error");

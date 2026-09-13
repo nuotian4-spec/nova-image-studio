@@ -432,5 +432,22 @@ describe('Grok plaza display name', () => {
     expect(fast?.modelId).toBe('grok-imagine-image');
     expect(registry.defaults.textToImage).toBe(quality?.id);
     expect(registry.defaults.imageToImage).toBe(quality?.id);
+    expect(registry.defaults.sliceImageEdit).toBe(quality?.id);
+  });
+
+  it('父站注入 grok 时 sliceImageEdit 跟随当前出图模型，不要求 openai', () => {
+    const registry = buildRegistryFromParentConfig(parentConfig({
+      image: {
+        apiKey: 'sk-grok',
+        protocol: 'grok_images',
+        model: 'grok-imagine-image',
+        models: [{ model: 'grok-imagine-image', protocol: 'grok_images' }],
+      },
+    }));
+    expect(registry.imageModels).toHaveLength(1);
+    expect(registry.imageModels[0]?.protocol).toBe('grok');
+    expect(registry.defaults.sliceImageEdit).toBe(registry.imageModels[0]?.id);
+    expect(registry.defaults.sliceImageEdit).toBe(registry.defaults.textToImage);
+    expect(registry.defaults.sliceImageEdit).not.toBe('');
   });
 });

@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Slider } from '@/components/ui/slider';
 import { getBlob, putBlob } from '@/lib/slice-db';
 import { runSliceInpaintWithMask } from '@/lib/slice-inpaint';
-import { hasSliceImageModel } from '@/lib/slice-model-config';
+import { hasSliceImageModel, reportSliceCapabilityGap } from '@/lib/slice-model-config';
 import type { SliceAsset } from '@/lib/slice-types';
 
 import { canvasToBlob, loadImageElement } from './slice-canvas-utils';
@@ -220,8 +220,11 @@ export function SliceInpaintEditor({
   const handleGenerate = async () => {
     if (!asset) return;
     if (!hasSliceImageModel()) {
-      showToast('AI 补齐需要一个 OpenAI 协议的图片模型，请先在设置中添加', 'error');
-      onConfigureApiKey();
+      reportSliceCapabilityGap({
+        kind: 'image',
+        showToast,
+        onConfigureApiKey,
+      });
       return;
     }
     const imageCanvas = imageCanvasRef.current;

@@ -23,15 +23,6 @@ export function getDataUrlByteSize(dataUrl: string) {
   return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
 }
 
-export function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("读取图片失败"));
-    reader.readAsDataURL(file);
-  });
-}
-
 export function readImageMeta(dataUrl: string) {
   return new Promise<{ width: number; height: number; mimeType: string }>((resolve) => {
     const image = new Image();
@@ -43,15 +34,21 @@ export function readImageMeta(dataUrl: string) {
   });
 }
 
-export function dataUrlToFile(image: ReferenceImage) {
-  const [header, content] = image.dataUrl.split(",", 2);
-  const mimeType = header.match(/data:(.*?);base64/)?.[1] || image.type || "image/png";
-  const binary = atob(content || "");
+/** 把 data URL 转成 Blob。Host CSP connect-src 不含 data:，禁止 fetch(data:)。 */
+export function dataUrlToBlob(dataUrl: string): Blob {
+  const [header, content = ""] = dataUrl.split(",", 2);
+  const mimeType = header.match(/data:([^;]+)/)?.[1] || "image/png";
+  const binary = atob(content);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index);
   }
-  return new File([bytes], image.name || "reference.png", { type: mimeType });
+  return new Blob([bytes], { type: mimeType });
+}
+
+export function dataUrlToFile(image: ReferenceImage) {
+  const blob = dataUrlToBlob(image.dataUrl);
+  return new File([blob], image.name || "reference.png", { type: blob.type || image.type || "image/png" });
 }
 
 // 参考图压缩参数：与图生图 upload-image-cache 保持一致，避免画布未压缩 PNG 把

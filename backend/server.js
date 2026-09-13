@@ -2423,8 +2423,9 @@ async function handleApi(req, res, pathname, searchParams) {
     // 的二进制），所以**不解析请求体**，原样透传字节流，只替换鉴权头。
     // 凭据走自定义头而不是表单字段，正是为了不必解析 multipart。
     //
-    // 仅支持 openai 协议：/v1/images/edits 的 mask 语义只有它有，
-    // 前端已在模型选择器层过滤（见 isSliceCapableImageModel），这里再兜一次。
+    // 转发到父站网关 /v1/images/edits。Host 按密钥分组路由
+    // （OpenAI / Grok 都走这条路径，payload 可带 mask）。
+    // 不要在这里按 protocol 拦截，也不要改成 Gemini generateContent。
     if (req.method === 'POST' && apiPathname === '/api/nova/proxy/image-edit') {
       try {
         const baseUrl = req.headers['x-nova-base-url'];

@@ -24,7 +24,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { hasSliceTextModel } from '@/lib/slice-model-config';
+import { hasSliceTextModel, reportSliceCapabilityGap } from '@/lib/slice-model-config';
 import { handleMarkdownCodeCopyButtonClick } from '@/lib/markdown-code-copy';
 import { renderMarkdown, renderReasoning } from '@/lib/render-reasoning';
 import { getBlob } from '@/lib/slice-db';
@@ -309,8 +309,11 @@ export function WebReplicaWorkspace({ onConfigureApiKey, showToast, onTaskStateC
 
   const requireApiKey = useCallback((): boolean => {
     if (hasSliceTextModel('sliceReconstruct')) return true;
-    showToast('请先在「设置 → 模型」中为「网页复刻」指定文本模型', 'error');
-    onConfigureApiKey();
+    reportSliceCapabilityGap({
+      kind: 'sliceReconstruct',
+      showToast,
+      onConfigureApiKey,
+    });
     return false;
   }, [onConfigureApiKey, showToast]);
 

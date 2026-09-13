@@ -21,7 +21,7 @@ import {
   resizePlacement,
   type ResizeHandle,
 } from '@/lib/slice-geometry';
-import { hasSliceImageModel } from '@/lib/slice-model-config';
+import { hasSliceImageModel, reportSliceCapabilityGap } from '@/lib/slice-model-config';
 import type { SliceAsset, SlicePlacement, SliceScreen } from '@/lib/slice-types';
 
 /** 弹窗内的可编辑评审模型（与 AI 返回结构解耦，便于撤销与逐项开关）。 */
@@ -329,8 +329,11 @@ export function BackgroundConfirmDialog({
   // ===== 生成 =====
   const handleGenerate = async () => {
     if (!hasSliceImageModel()) {
-      showToast('背景补齐需要一个 OpenAI 协议的图片模型，请先在设置中添加', 'error');
-      onConfigureApiKey();
+      reportSliceCapabilityGap({
+        kind: 'image',
+        showToast,
+        onConfigureApiKey,
+      });
       return;
     }
     const sourceImg = getSourceImg();

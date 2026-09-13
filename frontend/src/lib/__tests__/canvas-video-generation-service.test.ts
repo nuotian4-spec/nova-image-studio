@@ -106,6 +106,7 @@ beforeEach(() => {
 
 afterEach(() => {
   __resetCanvasUploadStoreForTests();
+  vi.unstubAllGlobals();
 });
 
 describe("visibleCanvasMediaFields", () => {
@@ -167,9 +168,13 @@ describe("submitCanvasVideoGeneration", () => {
     expect(progress?.map((item) => item.status)).toEqual(["done", "done", "done"]);
   });
 
-  it("画布图片引用经 imageToDataUrl → fetch → File 上传", async () => {
-    const blob = new Blob([new Uint8Array(4)], { type: "image/png" });
-    const fetchMock = vi.fn().mockResolvedValue({ blob: async () => blob });
+  it("画布图片引用经 dataUrl→Blob 转 File，即使 fetch(data:) 被 CSP 拦截也能上传", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input).startsWith("data:")) {
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${String(input)}`));
+    });
     vi.stubGlobal("fetch", fetchMock);
     imageToDataUrlMock.mockResolvedValue("data:image/png;base64,AAAA");
     uploadPluginMediaMock.mockResolvedValue({ url: "https://cdn/ref.png" });
@@ -185,6 +190,7 @@ describe("submitCanvasVideoGeneration", () => {
       mediaSlots: { multiImage: [ref], firstFrame: [], multiVideo: [] },
     });
 
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(imageToDataUrlMock).toHaveBeenCalledWith(ref.referenceImage);
     expect(uploadPluginMediaMock).toHaveBeenCalledWith(
       "ccode-h3",

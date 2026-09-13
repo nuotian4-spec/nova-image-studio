@@ -21,6 +21,7 @@ import {
 } from '@/lib/gif-job-store';
 import type { RefImageData } from '@/lib/job-store';
 import { supportsGptImageAdvancedParams, type GptImageAdvancedParams } from '@/lib/model-capabilities';
+import { useEmbedRuntime } from '@/hooks/useEmbedRuntime';
 
 export interface GifUploadedRef extends RefImageData {
   preview: string;
@@ -53,7 +54,10 @@ export interface GifParametersPanelProps {
   generating: boolean;
   canSubmit: boolean;
   onSubmit: () => void;
+  /** 真正缺密钥时走缺密钥弹窗；无 GIF 兼容模型时不要调用它。 */
   onConfigureApiKey: () => void;
+  /** 独立模式下无兼容模型时打开设置，嵌入模式不展示。 */
+  onOpenSettings?: () => void;
   onOptimize: () => void;
   onClear: () => void;
 }
@@ -63,6 +67,8 @@ function formatModelLabel(model: GifModel, modelOptions: { value: GifModel; labe
 }
 
 export function GifParametersPanel(props: GifParametersPanelProps) {
+  const embed = useEmbedRuntime();
+
   if (props.disabled) {
     return (
       <div className="flex min-h-72 flex-col items-center justify-center gap-4 rounded-xl border border-border bg-muted/40 px-4 py-8 text-center">
@@ -72,7 +78,9 @@ export function GifParametersPanel(props: GifParametersPanelProps) {
         <div className="max-w-md">
           <p className="text-base font-medium text-foreground">需要先配置令牌</p>
           <p className="mt-2 text-sm text-muted-foreground">
-            请先在设置中配置 Nova API 密钥，才能使用动图生成功能。
+            {embed.enabled
+              ? '请先在父站选出图密钥，才能使用动图生成功能。'
+              : '请先在设置中配置 Nova API 密钥，才能使用动图生成功能。'}
           </p>
         </div>
         <Button onClick={props.onConfigureApiKey}>配置</Button>
@@ -87,12 +95,16 @@ export function GifParametersPanel(props: GifParametersPanelProps) {
           <Info className="h-5 w-5" />
         </div>
         <div className="max-w-md">
-          <p className="text-base font-medium text-foreground">没有可用的 GIF 模型</p>
+          <p className="text-base font-medium text-foreground">没有可用的生图模型</p>
           <p className="mt-2 text-sm text-muted-foreground">
-            请先在设置中完成至少一个 image 系列的 4K 图片模型配置。banana 系列不支持这里需要的自定义分辨率，所以不会显示。
+            {embed.enabled
+              ? '父站还没有注入生图模型，请在「出图」栏选择密钥'
+              : '请在设置中配置生图模型后再使用动图生成。'}
           </p>
         </div>
-        <Button onClick={props.onConfigureApiKey}>打开设置</Button>
+        {!embed.enabled && props.onOpenSettings && (
+          <Button onClick={props.onOpenSettings}>打开设置</Button>
+        )}
       </div>
     );
   }
@@ -191,7 +203,7 @@ export function GifParametersPanel(props: GifParametersPanelProps) {
                   {option.label}
                 </button>
               ))}
-              <p className="px-2.5 py-1 text-[11px] text-muted-foreground">仅显示支持 4K 自定义分辨率的 image 系列模型，banana 系列不显示</p>
+              <p className="px-2.5 py-1 text-[11px] text-muted-foreground">列表来自当前可用的完整生图模型</p>
             </PopoverContent>
           </Popover>
 
@@ -252,7 +264,7 @@ export function GifParametersPanel(props: GifParametersPanelProps) {
           </div>
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          这里仅支持 image 系列的 4K 模型。banana 系列不支持当前动图网格所需的自定义分辨率，因此不提供选择。
+          支持自定义分辨率的模型会按 3264×2448 出 3×4 网格；其他模型使用其声明的最大输出档位。
         </p>
       </div>
     </div>

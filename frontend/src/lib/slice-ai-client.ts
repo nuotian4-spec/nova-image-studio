@@ -27,6 +27,7 @@ import {
 
 /** 图片编辑代理端点。凭据走自定义头，body 是原样透传的 multipart。 */
 const NOVA_PROXY_IMAGE_EDIT_ENDPOINT = '/api/nova/proxy/image-edit';
+// 代理一律打父站 /v1/images/edits；Host 按 key 的 group 路由，SliceImageModel 不需要 protocol 字段。
 
 /**
  * 切图各处的默认思考强度。
