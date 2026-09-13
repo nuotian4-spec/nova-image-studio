@@ -19,6 +19,7 @@ import { useQueueStatus } from '@/hooks/useQueueStatus';
 import { useWideMode } from '@/hooks/useWideMode';
 import { useServerTaskPolling } from '@/hooks/useServerTaskPolling';
 import { useWorkspaceJobs } from '@/hooks/useWorkspaceJobs';
+import { BrandLockup } from '@/components/workspace/BrandLockup';
 import { WorkspaceHeader, type WorkspaceHeaderRef } from '@/components/workspace/WorkspaceHeader';
 import { WorkspaceModeTabs } from '@/components/workspace/WorkspaceModeTabs';
 import { HistoryJobList, type GenerationHistoryFilter, type HistoryClearScope } from '@/components/workspace/results/HistoryJobList';
@@ -50,7 +51,6 @@ import { cn } from '@/lib/utils';
 import { BA_RANDOM_URL, BING_WALLPAPER_URL } from '@/lib/constants';
 import { EmbedCapabilityNotice } from '@/components/workspace/EmbedCapabilityNotice';
 import { useEmbedRuntime } from '@/hooks/useEmbedRuntime';
-import { withBasePath } from '@/lib/embed/public-path';
 import { isEmbeddedMode } from '@/lib/embed/mode';
 
 export function WorkspaceShell() {
@@ -285,15 +285,7 @@ export function WorkspaceShell() {
                   className="flex items-center gap-2 px-2 pt-3 pb-1 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   aria-label="麦迅工坊"
                 >
-                  <img
-                    src={withBasePath('/favicon.png')}
-                    alt="麦迅工坊"
-                    className="h-8 w-8 shrink-0 rounded-lg object-cover ring-1 ring-border/60"
-                  />
-                  <div className="min-w-0">
-                    <h2 className="truncate text-base font-semibold tracking-tight leading-tight">麦迅工坊</h2>
-                    <p className="truncate text-[11px] text-muted-foreground leading-tight">生图与 Agent 工作台</p>
-                  </div>
+                  <BrandLockup size="sidebar" />
                 </button>
               )}
               <div className={cn(wideMode ? 'flex flex-col py-4 flex-1' : 'flex flex-col py-1')}>
