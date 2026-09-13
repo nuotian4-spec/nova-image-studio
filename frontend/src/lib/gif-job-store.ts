@@ -1,3 +1,4 @@
+import { withBasePath } from '@/lib/embed/public-path';
 import type { RefImageData } from '@/lib/job-store';
 import { supportsCustomSize, type GptImageBackground, type GptImageQuality, type GptImageStyle } from '@/lib/model-capabilities';
 import { getDefaultImageModel, getCompleteImageModels, loadRegistry } from '@/lib/nova-models';
@@ -34,7 +35,8 @@ export interface ActiveGifJob {
 }
 
 const STORAGE_KEY = 'nova-gif-active-job';
-const TEMPLATE_URL = '/togif.png';
+/** 嵌入态必须带 basePath；裸 '/togif.png' 会打到父站根路径，被 SPA fallback 回成 HTML。 */
+const TEMPLATE_URL = withBasePath('/togif.png');
 
 export const GIF_MAX_REF_IMAGES = 6;
 export const GIF_DEFAULT_FRAME_DELAY_MS = 120;
@@ -78,17 +80,49 @@ export function saveActiveGifJob(job: ActiveGifJob | null): void {
 let cachedTemplate: { data: string; mimeType: string } | null = null;
 let inflightTemplate: Promise<{ data: string; mimeType: string }> | null = null;
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result || '');
-      const commaIndex = result.indexOf(',');
-      resolve(commaIndex >= 0 ? result.substring(commaIndex + 1) : result);
-    };
-    reader.onerror = () => reject(reader.error || new Error('读取模板图失败'));
-    reader.readAsDataURL(blob);
-  });
+const HTML_TEMPLATE_ERROR = '排版模板图内容不是图片（疑似父站 HTML 回退），禁止当 PNG 上传';
+
+function isImageContentType(value: string): boolean {
+  const mime = value.split(';')[0].trim().toLowerCase();
+  return mime.startsWith('image/');
+}
+
+/** 父站 SPA fallback 常返回 <!DOCTYPE html> / <html>，不能当 PNG 送给 edits。 */
+function looksLikeHtmlPrefix(raw: string): boolean {
+  const head = raw.replace(/^\uFEFF/, '').trimStart().slice(0, 64).toLowerCase();
+  return head.startsWith('<!doctype') || head.startsWith('<html');
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  // arrayBuffer 兼容 fetch 的 Blob 实现；jsdom FileReader 不认 undici Blob。
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  try {
+    return btoa(binary);
+  } catch {
+    throw new Error('读取模板图失败');
+  }
+}
+
+async function assertGifTemplateIsImage(response: Response, blob: Blob): Promise<void> {
+  const declaredType = response.headers.get('content-type') || blob.type || '';
+  if (declaredType && !isImageContentType(declaredType)) {
+    throw new Error(HTML_TEMPLATE_ERROR);
+  }
+  const sniff = await blob.slice(0, 512).text();
+  if (looksLikeHtmlPrefix(sniff)) {
+    throw new Error(HTML_TEMPLATE_ERROR);
+  }
+}
+
+/** 仅测试用：失败/串测不得把 HTML 或旧结果留在模块缓存里。 */
+export function resetGifTemplateCacheForTests(): void {
+  cachedTemplate = null;
+  inflightTemplate = null;
 }
 
 export async function loadGifTemplate(): Promise<{ data: string; mimeType: string }> {
@@ -96,17 +130,23 @@ export async function loadGifTemplate(): Promise<{ data: string; mimeType: strin
   if (inflightTemplate) return inflightTemplate;
 
   inflightTemplate = (async () => {
-    const response = await fetch(TEMPLATE_URL, { cache: 'force-cache' });
-    if (!response.ok) {
+    try {
+      const response = await fetch(TEMPLATE_URL, { cache: 'force-cache' });
+      if (!response.ok) {
+        throw new Error(`无法加载排版模板图 (${response.status})`);
+      }
+      const blob = await response.blob();
+      await assertGifTemplateIsImage(response, blob);
+      const data = await blobToBase64(blob);
+      const result = { data, mimeType: blob.type || 'image/png' };
+      cachedTemplate = result;
+      return result;
+    } catch (error) {
+      cachedTemplate = null;
+      throw error;
+    } finally {
       inflightTemplate = null;
-      throw new Error(`无法加载排版模板图 (${response.status})`);
     }
-    const blob = await response.blob();
-    const data = await blobToBase64(blob);
-    const result = { data, mimeType: blob.type || 'image/png' };
-    cachedTemplate = result;
-    inflightTemplate = null;
-    return result;
   })();
 
   return inflightTemplate;

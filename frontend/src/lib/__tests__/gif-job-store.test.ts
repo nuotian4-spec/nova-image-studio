@@ -1,11 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ingestParentStudioMessage } from '@/lib/embed/apply-parent';
 import { enableEmbeddedModeForTests, resetEmbedRuntimeForTests } from '@/lib/embed/mode';
+import { withBasePath } from '@/lib/embed/public-path';
 import {
   GIF_GRID_ASPECT_RATIO,
   GIF_GRID_CUSTOM_SIZE,
   GIF_GRID_OUTPUT_SIZE,
   getGifCompatibleModels,
+  loadGifTemplate,
+  resetGifTemplateCacheForTests,
   resolveGifGridSizeParams,
 } from '@/lib/gif-job-store';
 import { DEFAULT_DEFAULTS, saveRegistry, type NovaModelRegistry } from '@/lib/nova-models';
@@ -232,5 +235,91 @@ describe('resolveGifGridSizeParams', () => {
     expect(resolveGifGridSizeParams(modelId).customSize).toBeUndefined();
     expect(resolveGifGridSizeParams(modelId).outputSize).toBe('4K');
     expect(resolveGifGridSizeParams(modelId).aspectRatio).toBe(GIF_GRID_ASPECT_RATIO);
+  });
+});
+
+const PNG_1X1 = Uint8Array.from(
+  atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
+  (ch) => ch.charCodeAt(0),
+);
+
+const PARENT_SPA_HTML = '<!DOCTYPE html><html><head><title>index</title></head><body>spa</body></html>';
+
+function templateResponse(body: BodyInit, init?: ResponseInit): Response {
+  return new Response(body, init);
+}
+
+function mockTemplateFetch(build: () => Response): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn(async () => build());
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+describe('loadGifTemplate', () => {
+  afterEach(() => {
+    resetGifTemplateCacheForTests();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('fetch URL 必须是 /_nova/togif.png', async () => {
+    const fetchMock = mockTemplateFetch(() => templateResponse(PNG_1X1, {
+      status: 200,
+      headers: { 'Content-Type': 'image/png' },
+    }));
+
+    await loadGifTemplate();
+
+    expect(withBasePath('/togif.png')).toBe('/_nova/togif.png');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/_nova/togif.png');
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual({ cache: 'force-cache' });
+  });
+
+  it('父站 HTML 200 必须抛错且不缓存', async () => {
+    const fetchMock = mockTemplateFetch(() => templateResponse(PARENT_SPA_HTML, {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    }));
+
+    await expect(loadGifTemplate()).rejects.toThrow('禁止当 PNG 上传');
+    await expect(loadGifTemplate()).rejects.toThrow('排版模板图内容不是图片');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/_nova/togif.png');
+  });
+
+  it('Content-Type 伪称 image/png 但正文是 HTML 时仍拒绝且不缓存', async () => {
+    const fetchMock = mockTemplateFetch(() => templateResponse('  <html lang="zh">父站回退</html>', {
+      status: 200,
+      headers: { 'Content-Type': 'image/png' },
+    }));
+
+    await expect(loadGifTemplate()).rejects.toThrow('禁止当 PNG 上传');
+    await expect(loadGifTemplate()).rejects.toThrow(/HTML/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('真 PNG 成功，并缓存避免重复 fetch', async () => {
+    const fetchMock = mockTemplateFetch(() => templateResponse(PNG_1X1, {
+      status: 200,
+      headers: { 'Content-Type': 'image/png' },
+    }));
+
+    const first = await loadGifTemplate();
+    const second = await loadGifTemplate();
+
+    expect(first.mimeType).toBe('image/png');
+    expect(first.data.length).toBeGreaterThan(0);
+    expect(second).toEqual(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/_nova/togif.png');
+  });
+
+  it('非 2xx 仍抛无法加载排版模板图，且失败不缓存', async () => {
+    const fetchMock = mockTemplateFetch(() => templateResponse('missing', { status: 404 }));
+
+    await expect(loadGifTemplate()).rejects.toThrow('无法加载排版模板图 (404)');
+    await expect(loadGifTemplate()).rejects.toThrow('无法加载排版模板图 (404)');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
