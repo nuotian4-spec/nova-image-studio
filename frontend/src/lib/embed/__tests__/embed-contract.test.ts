@@ -25,6 +25,7 @@ import {
   uninstallEmbeddedNovaAuthIntercept,
 } from '@/lib/embed/nova-auth-fetch';
 import { loadRegistry, saveRegistry } from '@/lib/nova-models';
+import { buildRegistryFromParentConfig, canonicalizeGrokUpstreamModelId } from '@/lib/embed/parent-registry';
 import { hasImageApiKey, hasTextApiKey } from '@/lib/settings-storage';
 
 const PARENT_BASE = 'https://parent.example/';
@@ -395,3 +396,41 @@ describe('sessionToken 只给 /api/nova 加 Bearer，不 persist、不当 API Ke
   });
 });
 
+
+
+describe('Grok plaza display name', () => {
+  it('canonicalizeGrokUpstreamModelId maps plaza names to official IDs', () => {
+    expect(canonicalizeGrokUpstreamModelId('Grok Imagine Image Quality')).toBe('grok-imagine-image-quality');
+    expect(canonicalizeGrokUpstreamModelId('Grok  Imagine   Image Quality')).toBe('grok-imagine-image-quality');
+    expect(canonicalizeGrokUpstreamModelId('grok-imagine')).toBe('grok-imagine-image-quality');
+    expect(canonicalizeGrokUpstreamModelId('grok-imagine-1')).toBe('grok-imagine-image-quality');
+    expect(canonicalizeGrokUpstreamModelId('grok-imagine-edit')).toBe('grok-imagine-image-quality');
+    expect(canonicalizeGrokUpstreamModelId('Grok Imagine Image')).toBe('grok-imagine-image');
+    expect(canonicalizeGrokUpstreamModelId('Grok Imagine Image 2.0')).toBe('grok-imagine-image-2.0');
+    expect(canonicalizeGrokUpstreamModelId('grok-imagine-image')).toBe('grok-imagine-image');
+    expect(canonicalizeGrokUpstreamModelId('grok-imagine-image-2026-03-02')).toBe('grok-imagine-image-2026-03-02');
+    expect(canonicalizeGrokUpstreamModelId('grok-imagine-image-pro')).toBe('grok-imagine-image-pro');
+    expect(canonicalizeGrokUpstreamModelId('grok-imagine-image-quality-20260403')).toBe('grok-imagine-image-quality-20260403');
+  });
+
+  it('buildRegistryFromParentConfig sends canonical grok modelId', () => {
+    const registry = buildRegistryFromParentConfig(parentConfig({
+      image: {
+        apiKey: 'sk-test',
+        protocol: 'grok_images',
+        model: 'Grok Imagine Image Quality',
+        models: [
+          { model: 'grok-imagine-image', protocol: 'grok_images' },
+          { model: 'Grok Imagine Image Quality', protocol: 'grok_images' },
+        ],
+      },
+    }));
+    const quality = registry.imageModels.find((model) => model.name === 'Grok Imagine Image Quality');
+    expect(quality?.modelId).toBe('grok-imagine-image-quality');
+    expect(quality?.builtinPreset).toBe('grok-imagine-image-quality');
+    const fast = registry.imageModels.find((model) => model.name === 'grok-imagine-image');
+    expect(fast?.modelId).toBe('grok-imagine-image');
+    expect(registry.defaults.textToImage).toBe(quality?.id);
+    expect(registry.defaults.imageToImage).toBe(quality?.id);
+  });
+});

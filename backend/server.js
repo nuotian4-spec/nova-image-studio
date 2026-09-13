@@ -1174,7 +1174,8 @@ function createGrokImageRequestInit(apiKey, request, options = {}) {
     const payload = {
       model: request.model,
       prompt,
-      response_format: 'url',
+      // Host 只把 b64_json 转给 xAI；url 会被丢掉，上游默认可能回 https URL。
+      response_format: 'b64_json',
       ...(stream ? { stream: true } : {}),
       ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
       ...(resolution ? { resolution } : {}),
@@ -1193,7 +1194,8 @@ function createGrokImageRequestInit(apiKey, request, options = {}) {
   const payload = {
     model: request.model,
     prompt,
-    response_format: 'url',
+    // Host 只把 b64_json 转给 xAI；url 会被丢掉，上游默认可能回 https URL。
+    response_format: 'b64_json',
     ...(stream ? { stream: true } : {}),
     ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
     ...(resolution ? { resolution } : {}),
@@ -1360,6 +1362,7 @@ function drainQueue() {
 }
 
 async function generateSingleImage(apiKey, request, taskId, index) {
+  let stage = 'generateNovaImage';
   try {
     const image = await generateNovaImage(apiKey, request);
     const expanded = image.startsWith('MULTI_URL:') ? image.substring(10).split('|||').map(url => `URL:${url}`) : [image];
@@ -1367,10 +1370,12 @@ async function generateSingleImage(apiKey, request, taskId, index) {
     for (let subIdx = 0; subIdx < expanded.length; subIdx++) {
       const img = expanded[subIdx];
       if (img.startsWith('URL:')) {
+        stage = 'downloadUrlToDisk';
         const remoteUrl = img.substring(4);
         const result = await downloadUrlToDisk(taskId, index, subIdx, remoteUrl);
         diskRefs.push(`URL:${result.httpUrl}`);
       } else {
+        stage = 'saveImageToDisk';
         const buffer = Buffer.from(img, 'base64');
         const result = saveImageToDisk(taskId, index, subIdx, buffer, 'image/png');
         diskRefs.push(`URL:${result.httpUrl}`);
@@ -1380,6 +1385,8 @@ async function generateSingleImage(apiKey, request, taskId, index) {
       .run(JSON.stringify(diskRefs), new Date().toISOString(), taskId, index);
     return { success: true, images: diskRefs };
   } catch (error) {
+    const raw = error instanceof Error ? error.message : String(error);
+    console.warn(`[generateSingleImage] stage=${stage} protocol=${request?.protocol || ''} model=${request?.model || ''} taskId=${taskId}: ${raw}`);
     const message = normalizeError(error);
     db.prepare("UPDATE task_items SET status = 'failed', error = ?, completed_at = ? WHERE task_id = ? AND item_index = ?")
       .run(message, new Date().toISOString(), taskId, index);

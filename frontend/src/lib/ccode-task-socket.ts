@@ -6,7 +6,8 @@ type QueueUpdateHandler = (stats: NovaQueueStatus) => void;
 const RECONNECT_BASE_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const SOCKET_FAILURE_THRESHOLD = 5;
-const HTTP_FALLBACK_INTERVAL_MS = 30000;
+/** 等待中任务的 HTTP 权威对账间隔。即使 WS OPEN 也跑，用于补上订阅前已 broadcast 的 processing。 */
+export const HTTP_FALLBACK_INTERVAL_MS = 5000;
 const HEARTBEAT_INTERVAL_MS = 25000;
 const HEARTBEAT_TIMEOUT_MS = 10000;
 
@@ -47,7 +48,7 @@ function buildSocketUrl(): string | null {
   }
 }
 
-class NovaTaskSocket {
+export class NovaTaskSocket {
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -82,10 +83,11 @@ class NovaTaskSocket {
     }
     set.add(handler);
     this.ensureConnected();
-    if (this.fallbackActive) {
-      // socket 不可用时，立即拉一次以便回填初始状态
-      this.fetchTaskOnce(taskId);
-    } else if (this.ws?.readyState === WebSocket.OPEN) {
+    // drainQueue 可能在 create 返回、前端订阅前就 broadcast processing。
+    // HTTP GET 是权威对账：订阅后立刻拉一次，等待期间即使 WS OPEN 也短间隔对账。
+    void this.fetchTaskOnce(taskId);
+    this.ensureHttpPoll();
+    if (!this.fallbackActive && this.ws?.readyState === WebSocket.OPEN) {
       this.send({ type: 'subscribeTasks', taskIds: [taskId] });
     }
     return () => this.unsubscribeTask(taskId, handler);
@@ -107,11 +109,13 @@ class NovaTaskSocket {
     };
   }
 
-  /** 测试用：禁用网络层 */
+  /** 测试用：禁用网络层并释放定时器 / 全局监听 */
   disable(): void {
     this.explicitlyDisabled = true;
     this.cleanupConnection();
     this.stopFallback();
+    this.stopHttpPoll();
+    this.unbindGlobalListeners();
   }
 
   private unsubscribeTask(taskId: string, handler: TaskUpdateHandler): void {
@@ -124,6 +128,9 @@ class NovaTaskSocket {
         this.send({ type: 'unsubscribeTasks', taskIds: [taskId] });
       }
     }
+    if (this.taskHandlers.size === 0 && this.queueHandlers.size === 0) {
+      this.stopHttpPoll();
+    }
   }
 
   private bindGlobalListeners(): void {
@@ -132,6 +139,15 @@ class NovaTaskSocket {
     window.addEventListener('online', this.handleOnline);
     window.addEventListener('pageshow', this.handlePageShow);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
+  }
+
+  private unbindGlobalListeners(): void {
+    if (!this.listenersBound) return;
+    this.listenersBound = false;
+    if (typeof window === 'undefined') return;
+    window.removeEventListener('online', this.handleOnline);
+    window.removeEventListener('pageshow', this.handlePageShow);
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
   }
 
   private hasLiveSocket(): boolean {
@@ -334,22 +350,33 @@ class NovaTaskSocket {
     }
   }
 
-  // ===== HTTP 兜底 =====
+  // ===== HTTP 权威对账（与 WS 并存，不是仅在 WS 失败时才启用） =====
+  private ensureHttpPoll(): void {
+    if (this.fallbackTimer) return;
+    this.fallbackTimer = setInterval(() => this.runFallbackTick(), HTTP_FALLBACK_INTERVAL_MS);
+  }
+
+  private stopHttpPoll(): void {
+    if (this.fallbackTimer) {
+      clearInterval(this.fallbackTimer);
+      this.fallbackTimer = null;
+    }
+  }
+
   private activateFallback(): void {
     if (this.fallbackActive) return;
     this.fallbackActive = true;
     this.cleanupConnection();
+    this.ensureHttpPoll();
     this.runFallbackTick();
-    this.fallbackTimer = setInterval(() => this.runFallbackTick(), HTTP_FALLBACK_INTERVAL_MS);
     // 兜底期间也允许通过 online/pageshow 重新尝试 socket
   }
 
   private stopFallback(): void {
     if (!this.fallbackActive) return;
     this.fallbackActive = false;
-    if (this.fallbackTimer) {
-      clearInterval(this.fallbackTimer);
-      this.fallbackTimer = null;
+    if (this.taskHandlers.size === 0 && this.queueHandlers.size === 0) {
+      this.stopHttpPoll();
     }
   }
 
