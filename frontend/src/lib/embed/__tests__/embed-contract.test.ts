@@ -26,6 +26,7 @@ import {
 } from '@/lib/embed/nova-auth-fetch';
 import { loadRegistry, saveRegistry } from '@/lib/nova-models';
 import { buildRegistryFromParentConfig, canonicalizeGrokUpstreamModelId } from '@/lib/embed/parent-registry';
+import { supportsReferenceImages } from '@/lib/model-capabilities';
 import { hasImageApiKey, hasTextApiKey } from '@/lib/settings-storage';
 
 const PARENT_BASE = 'https://parent.example/';
@@ -449,5 +450,89 @@ describe('Grok plaza display name', () => {
     expect(registry.defaults.sliceImageEdit).toBe(registry.imageModels[0]?.id);
     expect(registry.defaults.sliceImageEdit).toBe(registry.defaults.textToImage);
     expect(registry.defaults.sliceImageEdit).not.toBe('');
+  });
+
+  it('父站只注入 grok-imagine-image 时允许 3 张参考图，不改写成 edit', () => {
+    const registry = buildRegistryFromParentConfig(parentConfig({
+      image: {
+        apiKey: 'sk-grok',
+        protocol: 'grok_images',
+        model: 'grok-imagine-image',
+        models: [{ model: 'grok-imagine-image', protocol: 'grok_images' }],
+      },
+    }));
+    expect(registry.imageModels).toHaveLength(1);
+    const grok = registry.imageModels[0];
+    expect(grok?.maxRefImages).toBe(3);
+    expect(grok?.modelId).toBe('grok-imagine-image');
+    expect(grok?.builtinPreset).toBe('grok-imagine-image');
+    expect(grok?.modelId).not.toContain('edit');
+  });
+
+  it('父站只注入 grok-imagine-image-quality 时允许 3 张参考图，不是 grok-imagine-image-edit', () => {
+    const registry = buildRegistryFromParentConfig(parentConfig({
+      image: {
+        apiKey: 'sk-grok',
+        protocol: 'grok_images',
+        model: 'grok-imagine-image-quality',
+        models: [{ model: 'grok-imagine-image-quality', protocol: 'grok_images' }],
+      },
+    }));
+    expect(registry.imageModels).toHaveLength(1);
+    const quality = registry.imageModels[0];
+    expect(quality?.maxRefImages).toBe(3);
+    expect(quality?.modelId).toBe('grok-imagine-image-quality');
+    expect(quality?.builtinPreset).toBe('grok-imagine-image-quality');
+    expect(quality?.modelId).not.toBe('grok-imagine-image-edit');
+    expect(quality?.builtinPreset).not.toBe('grok-imagine-image-edit');
+  });
+
+  it('父站同时注入 grok fast 与 quality 时两只都允许 3 张参考图', () => {
+    const registry = buildRegistryFromParentConfig(parentConfig({
+      image: {
+        apiKey: 'sk-test',
+        protocol: 'grok_images',
+        model: 'Grok Imagine Image Quality',
+        models: [
+          { model: 'grok-imagine-image', protocol: 'grok_images' },
+          { model: 'Grok Imagine Image Quality', protocol: 'grok_images' },
+        ],
+      },
+    }));
+    const quality = registry.imageModels.find((model) => model.name === 'Grok Imagine Image Quality');
+    const fast = registry.imageModels.find((model) => model.name === 'grok-imagine-image');
+    expect(fast?.maxRefImages).toBe(3);
+    expect(quality?.maxRefImages).toBe(3);
+    expect(fast?.modelId).toBe('grok-imagine-image');
+    expect(quality?.modelId).toBe('grok-imagine-image-quality');
+    expect(fast?.modelId).not.toContain('edit');
+    expect(quality?.modelId).not.toBe('grok-imagine-image-edit');
+    expect(quality?.builtinPreset).not.toBe('grok-imagine-image-edit');
+  });
+
+  it('注入 Grok 官方 ID 后 supportsReferenceImages 为 true，且不污染 registry', () => {
+    const previous = localStorage.getItem('nova-model-registry');
+    try {
+      const registry = buildRegistryFromParentConfig(parentConfig({
+        image: {
+          apiKey: 'sk-test',
+          protocol: 'grok_images',
+          model: 'Grok Imagine Image Quality',
+          models: [
+            { model: 'grok-imagine-image', protocol: 'grok_images' },
+            { model: 'Grok Imagine Image Quality', protocol: 'grok_images' },
+          ],
+        },
+      }));
+      saveRegistry(registry);
+      for (const model of registry.imageModels) {
+        expect(model.maxRefImages).toBe(3);
+        expect(model.modelId).not.toContain('edit');
+        expect(supportsReferenceImages(model.id)).toBe(true);
+      }
+    } finally {
+      if (previous == null) localStorage.removeItem('nova-model-registry');
+      else localStorage.setItem('nova-model-registry', previous);
+    }
   });
 });
