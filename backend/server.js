@@ -14,6 +14,7 @@ const { validateAndNormalizeInput, InputError } = require('./plugin-runtime/inpu
 const { createMediaStore } = require('./plugin-runtime/media');
 const { rewriteParentGatewayBaseUrl } = require('./rewrite-parent-gateway-base-url');
 const { shouldSkipImageStream, shouldRetryImageWithoutStream } = require('./image-stream-fallback');
+const { extractGeminiImagePayload, readGeminiResponse } = require('./gemini-image-response');
 
 const ENV_FILE_PATH = process.env.NOVA_ENV_FILE || path.join(process.cwd(), '.env');
 const TASK_STATUS = {
@@ -1286,13 +1287,6 @@ async function generateNovaImage(apiKey, request) {
   return generateNovaGeminiImage(apiKey, request, { baseUrl });
 }
 
-function extractGeminiImagePayload(data) {
-  const imagePart = data?.candidates?.[0]?.content?.parts?.find(part => part?.inlineData?.data || part?.inline_data?.data);
-  const inlineData = imagePart?.inlineData || imagePart?.inline_data;
-  if (!inlineData?.data) throw new Error('响应中无图片数据');
-  return inlineData.data;
-}
-
 async function generateNovaGeminiImage(apiKey, request, options = {}) {
   const baseUrl = resolveParentGatewayBaseUrl(options.baseUrl) || resolveNovaApiBaseUrl();
   const parts = [
@@ -1320,7 +1314,7 @@ async function generateNovaGeminiImage(apiKey, request, options = {}) {
     throw new Error(`API 请求失败: ${response.status} ${errorText}`);
   }
 
-  const responseText = await response.text();
+  const responseText = await readGeminiResponse(response);
   if (isLikelyHtmlResponse(responseText)) {
     throw new Error('上游返回了 HTML 页面而不是 JSON。通常是 baseUrl 配置错误、请求被站点网关拦截，或该地址并非兼容的图片 API。');
   }
@@ -1365,7 +1359,9 @@ async function generateSingleImage(apiKey, request, taskId, index) {
   let stage = 'generateNovaImage';
   try {
     const image = await generateNovaImage(apiKey, request);
-    const expanded = image.startsWith('MULTI_URL:') ? image.substring(10).split('|||').map(url => `URL:${url}`) : [image];
+    const imageMime = typeof image === 'object' ? image.mimeType : 'image/png';
+    const imageData = typeof image === 'object' ? image.data : image;
+    const expanded = imageData.startsWith('MULTI_URL:') ? imageData.substring(10).split('|||').map(url => `URL:${url}`) : [imageData];
     const diskRefs = [];
     for (let subIdx = 0; subIdx < expanded.length; subIdx++) {
       const img = expanded[subIdx];
@@ -1377,7 +1373,7 @@ async function generateSingleImage(apiKey, request, taskId, index) {
       } else {
         stage = 'saveImageToDisk';
         const buffer = Buffer.from(img, 'base64');
-        const result = saveImageToDisk(taskId, index, subIdx, buffer, 'image/png');
+        const result = saveImageToDisk(taskId, index, subIdx, buffer, imageMime);
         diskRefs.push(`URL:${result.httpUrl}`);
       }
     }
