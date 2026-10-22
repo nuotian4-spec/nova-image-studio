@@ -95,8 +95,10 @@ export const CompletedJobCard = memo(function CompletedJobCard({ job, onClear, o
 
   /** 是否存在仍以远程 URL 形式呈现的图片（即首次本地缓存失败、需要"重新下载"补齐）。 */
   const needsRedownload = useMemo(
-    () => sourceImages.some(img => img.startsWith('URL:') || img.startsWith('MULTI_URL:')),
-    [sourceImages]
+    () => !job.recoveryUnavailable && (job.localPersistence === 'temporary' || job.localPersistence === 'missing'
+      || (job.localPersistence === 'saved' && !!job.serverTaskId && !job.serverTaskAcked)
+      || sourceImages.some(img => img.startsWith('URL:') || img.startsWith('MULTI_URL:'))),
+    [job.localPersistence, job.recoveryUnavailable, job.serverTaskAcked, job.serverTaskId, sourceImages]
   );
   const downloadProgressSummary = useMemo(
     () => getDownloadProgressSummary(job.imageDownloadProgress),
@@ -233,7 +235,23 @@ export const CompletedJobCard = memo(function CompletedJobCard({ job, onClear, o
   }, [lazyLoad.isVisible, resolveImageAt]);
 
   if (sourceImages.length === 0) {
-    return null;
+    return (
+      <div className="rounded-xl border border-border bg-card p-4" data-testid="completed-missing-image">
+        <p className="truncate text-base text-foreground">&quot;{job.prompt}&quot;</p>
+        <p className="mt-1 text-sm text-warning">
+          {!job.localRecoveryChecked ? '正在读取本机图片…' : job.warning || '生成已完成，本机图片缺失。'}
+        </p>
+        {job.serverExpiresAt && <p className="mt-1 text-xs text-muted-foreground">服务器临时副本到期：{new Date(job.serverExpiresAt).toLocaleString()}</p>}
+        <div className="mt-2 flex gap-2">
+          {job.localRecoveryChecked && !job.recoveryUnavailable && job.serverTaskId && onRetryDownload && (
+            <Button variant="ghost" onClick={() => void handleRetryDownload()} disabled={retryingDownload}>
+              {retryingDownload ? '正在取回已有图片' : '取回已有图片'}
+            </Button>
+          )}
+          <Button variant="ghost" onClick={onClear}>删除记录</Button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -317,8 +335,14 @@ export const CompletedJobCard = memo(function CompletedJobCard({ job, onClear, o
             {job.warning && (
               <p className="mt-1 flex items-center gap-1.5 text-xs text-warning">
                 <AlertCircle className="w-3 h-3 flex-shrink-0" />
-                <span className="truncate">{job.warning}</span>
+                <span>{job.warning}</span>
               </p>
+            )}
+            <p className="mt-1 text-xs text-muted-foreground">
+              {job.localPersistence === 'saved' ? '已保存到本机浏览器' : job.localPersistence === 'saving' ? '正在保存到本机…' : '尚未确认本机保存，请及时下载图片'}
+            </p>
+            {job.serverExpiresAt && !job.serverTaskAcked && job.localPersistence !== 'saved' && (
+              <p className="mt-1 text-xs text-muted-foreground">服务器临时副本到期：{new Date(job.serverExpiresAt).toLocaleString()}</p>
             )}
 
             {downloadProgressSummary && (
@@ -371,7 +395,7 @@ export const CompletedJobCard = memo(function CompletedJobCard({ job, onClear, o
                   size="icon-sm"
                   onClick={() => void handleRetryDownload()}
                   disabled={retryingDownload || isDownloadingImages}
-                  title={isDownloadingImages ? '正在取回图片' : '重新下载到本地缓存'}
+                  title={isDownloadingImages ? '正在取回图片' : job.localPersistence === 'saved' ? '重试领取确认' : '重新保存已有图片'}
                   className="text-warning hover:text-warning/80"
                 >
                   <RefreshCw className={`w-4 h-4 ${retryingDownload || isDownloadingImages ? 'animate-spin' : ''}`} />

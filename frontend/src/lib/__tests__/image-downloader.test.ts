@@ -112,4 +112,21 @@ describe('downloadAndStoreImages', () => {
     expect(progress.some(item => item.status === 'downloading' && item.percent === 100)).toBe(true);
     await expect(getStoredBlob('job-fallback', 0)).resolves.toMatchObject({ size: 2 });
   });
+
+  it('工作台严格模式中内存预览不算持久保存成功', async () => {
+    vi.stubGlobal('indexedDB', undefined);
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:temporary'), revokeObjectURL: vi.fn() });
+    mockImageFetch(new Response(new Uint8Array([1, 2]), { headers: { 'content-type': 'image/png' } }));
+    const result = await downloadAndStoreImages('strict-fallback', ['URL:/image.png'], {
+      maxRetries: 1,
+      requirePersistentStorage: true,
+    });
+    expect(result.successCount).toBe(0);
+    expect(result.failCount).toBe(1);
+    expect(result.persisted).toEqual([false]);
+    expect(result.blobUrls).toEqual(['blob:temporary']);
+    expect(result.items[0].status).toBe('failed');
+    await expect(getStoredBlob('strict-fallback', 0)).resolves.toMatchObject({ size: 2 });
+    await expect(getStoredBlob('strict-fallback', 0, true)).resolves.toBeNull();
+  });
 });

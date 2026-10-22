@@ -1,4 +1,4 @@
-import { openImageDb, BLOBS_STORE } from '@/lib/image-db';
+import { openImageDb, BLOBS_STORE, IMG_STORE } from '@/lib/image-db';
 
 const MAX_FALLBACK_STORE_SIZE = 50;
 
@@ -183,32 +183,74 @@ export async function fetchImageAsBlob(
   throw lastError || new Error('图片下载失败');
 }
 
-async function storeImageBlobInternal(jobId: string, imageIndex: number, blob: Blob): Promise<void> {
+async function storeImageBlobInternal(jobId: string, imageIndex: number, blob: Blob, requirePersistentStorage = false): Promise<boolean> {
   const db = await openImageDb();
   if (!db) {
     setFallbackBlob(`${jobId}-${imageIndex}`, blob);
-    return;
+    if (requirePersistentStorage) throw new Error('浏览器本机图片存储不可用');
+    return false;
   }
 
-  return new Promise<void>((resolve) => {
-    const tx = db.transaction(BLOBS_STORE, 'readwrite');
-    tx.objectStore(BLOBS_STORE).put({ key: `${jobId}-${imageIndex}`, jobId, imageIndex, blob, createdAt: Date.now() });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => {
-      setFallbackBlob(`${jobId}-${imageIndex}`, blob);
-      resolve();
+  return new Promise<boolean>((resolve, reject) => {
+    let settled = false;
+    let deleted = false;
+    const fail = (error: unknown) => {
+      if (!deleted) setFallbackBlob(`${jobId}-${imageIndex}`, blob);
+      if (settled) return;
+      settled = true;
+      if (requirePersistentStorage) {
+        reject(error instanceof Error ? error : new Error('浏览器本机图片保存失败'));
+      } else {
+        resolve(false);
+      }
     };
+    let tx: IDBTransaction;
+    try {
+      tx = db.transaction(requirePersistentStorage ? [BLOBS_STORE, IMG_STORE] : BLOBS_STORE, 'readwrite');
+      const write = () => tx.objectStore(BLOBS_STORE).put({ key: `${jobId}-${imageIndex}`, jobId, imageIndex, blob, createdAt: Date.now() });
+      if (requirePersistentStorage) {
+        const prior = tx.objectStore(IMG_STORE).get(jobId);
+        prior.onsuccess = () => {
+          if (prior.result?.deleted) {
+            deleted = true;
+            tx.abort();
+          } else {
+            try { write(); } catch (error) {
+              fail(error);
+              tx.abort();
+            }
+          }
+        };
+      } else {
+        write();
+      }
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    tx.oncomplete = () => {
+      if (settled) return;
+      settled = true;
+      resolve(true);
+    };
+    tx.onerror = () => fail(tx.error || new Error('浏览器本机图片保存失败'));
+    tx.onabort = () => fail(tx.error || new Error('浏览器本机图片保存事务已中止'));
   });
 }
 
 export async function storeImageBlob(jobId: string, imageIndex: number, blob: Blob): Promise<void> {
-  return storeImageBlobInternal(jobId, imageIndex, blob);
+  await storeImageBlobInternal(jobId, imageIndex, blob);
 }
 
-export async function getStoredBlob(jobId: string, imageIndex: number): Promise<Blob | null> {
+/** Nova工作台严格模式：内存fallback只用于当前页面预览，不可冒充持久保存成功。 */
+export async function storeImageBlobForWorkspace(jobId: string, imageIndex: number, blob: Blob): Promise<void> {
+  await storeImageBlobInternal(jobId, imageIndex, blob, true);
+}
+
+export async function getStoredBlob(jobId: string, imageIndex: number, persistentOnly = false): Promise<Blob | null> {
   const fallbackKey = `${jobId}-${imageIndex}`;
   const fallback = getFallbackBlob(fallbackKey);
-  if (fallback) return fallback;
+  if (fallback && !persistentOnly) return fallback;
 
   const db = await openImageDb();
   if (!db) return null;
@@ -286,14 +328,18 @@ export async function deleteStoredBlobs(jobId: string, imageCount?: number): Pro
 }
 
 export interface DownloadResult {
+  /** 图片字节已写入IndexedDB的数量；严格模式下只有持久写成功才计入。 */
   successCount: number;
   failCount: number;
   blobUrls: string[];
+  persisted?: boolean[];
   items: ImageDownloadProgressItem[];
 }
 
 export interface DownloadAndStoreImagesOptions {
   maxRetries?: number;
+  /** 要求IndexedDB持久写成功；失败时仍返回内存预览URL，但计为失败。 */
+  requirePersistentStorage?: boolean;
   onProgress?: ImageDownloadProgressHandler;
 }
 
@@ -320,6 +366,7 @@ export async function downloadAndStoreImages(
   let successCount = 0;
   let failCount = 0;
   const blobUrls: string[] = new Array(imageRefs.length).fill('');
+  const persisted: boolean[] = new Array(imageRefs.length).fill(false);
   const items = createInitialDownloadItems(imageRefs);
 
   const tasks = imageRefs.map(async (ref, i) => {
@@ -334,13 +381,27 @@ export async function downloadAndStoreImages(
       const blob = await fetchImageAsBlob(url, options.maxRetries ?? 2, progress => {
         emit({ index: i, status: 'downloading', ...progress });
       });
-      await storeImageBlob(jobId, i, blob);
       blobUrls[i] = URL.createObjectURL(blob);
-      successCount++;
+      try {
+        persisted[i] = await storeImageBlobInternal(jobId, i, blob, options.requirePersistentStorage === true);
+        if (persisted[i] || options.requirePersistentStorage !== true) successCount++;
+        else failCount++;
+      } catch (error) {
+        failCount++;
+        emit({
+          index: i,
+          status: 'failed',
+          loadedBytes: blob.size,
+          totalBytes: blob.size || undefined,
+          percent: blob.size ? 100 : undefined,
+          error: `本机图片保存失败：${getErrorMessage(error)}`,
+        });
+        return;
+      }
       const totalBytes = items[i]?.totalBytes || blob.size || undefined;
       emit({
         index: i,
-        status: 'cached',
+        status: persisted[i] || options.requirePersistentStorage !== true ? 'cached' : 'failed',
         loadedBytes: blob.size,
         totalBytes,
         percent: getPercent(blob.size, totalBytes),
@@ -359,7 +420,7 @@ export async function downloadAndStoreImages(
   });
 
   await Promise.allSettled(tasks);
-  return { successCount, failCount, blobUrls, items };
+  return { successCount, failCount, blobUrls, persisted, items };
 }
 
 export function revokeBlobUrls(blobUrls: string[]): void {

@@ -289,7 +289,6 @@ export function HistoryJobList({
   hasAnyJobs,
   emptyDescription,
   jobs,
-  loadedImages,
   checkingJobIds,
   cooldowns,
   onRetry,
@@ -305,11 +304,10 @@ export function HistoryJobList({
   const clearScope: HistoryClearScope = historyFilter || (mode === 'image-to-image' ? 'image-to-image' : 'text-to-image');
 
   const renderJobCard = (job: StoredJob) => {
-    const hasImage = job.status === 'completed' && (job.images || job.imageData) && loadedImages.has(job.id);
     if (isWaitingJob(job)) {
       return <WaitingJobCard job={job} now={now} isChecking={checkingJobIds.has(job.id)} cooldownEnd={cooldowns.get(job.id)} onCancel={onCancel} onCheckStatus={onCheckStatus} />;
     }
-    if (hasImage) {
+    if (job.status === 'completed') {
       return <CompletedJobCard job={job} onClear={() => onClear(job.id)} onRetry={onRetry} onRetryDownload={onRetryDownload} />;
     }
     if (job.status === 'failed') {

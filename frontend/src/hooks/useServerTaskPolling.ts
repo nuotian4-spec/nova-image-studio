@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { novaTaskSocket } from '@/lib/ccode-task-socket';
-import { finalizeCompletedServerTask, type SubmitActions } from '@/lib/workspace-task-service';
+import { finalizeCompletedServerTask, retryDownloadCachedImages, type SubmitActions } from '@/lib/workspace-task-service';
 import type { StoredJob } from '@/lib/job-store';
 import { classifyTaskFailure } from '@/lib/task-failure';
 import type { NovaTaskResponse } from '@/lib/ccode-task-client';
@@ -29,6 +29,8 @@ export function useServerTaskPolling(
   const subscriptionsRef = useRef<Map<string, () => void>>(new Map());
   const actionsRef = useRef(actions);
   const hasJobRef = useRef(hasJob);
+  const recoveredRef = useRef(new Set<string>());
+  const recoveryRunningRef = useRef(false);
 
   useEffect(() => { actionsRef.current = actions; }, [actions]);
   useEffect(() => { hasJobRef.current = hasJob; }, [hasJob]);
@@ -98,6 +100,33 @@ export function useServerTaskPolling(
         subscriptions.delete(taskId);
       }
     }
+  }, [jobs]);
+
+  useEffect(() => {
+    if (recoveryRunningRef.current) return;
+    // 先完成本地恢复，再串行补取；每次打开最多自动处理8条，每条最多一次。
+    const candidates = jobs.filter(job => job.status === 'completed'
+      && job.localRecoveryChecked
+      && job.serverTaskId
+      && !job.recoveryUnavailable
+      && (job.localPersistence === 'missing' || (job.localPersistence === 'saved' && !job.serverTaskAcked))
+      && !recoveredRef.current.has(job.id))
+      .slice(0, Math.max(0, 8 - recoveredRef.current.size));
+    if (!candidates.length) return;
+    recoveryRunningRef.current = true;
+    void (async () => {
+      try {
+        for (const job of candidates) {
+          if (!mountedRef.current) break;
+          recoveredRef.current.add(job.id);
+          if (!hasJobRef.current(job.id)) continue;
+          const current = actionsRef.current.getJob?.(job.id) || job;
+          await retryDownloadCachedImages(current, actionsRef.current);
+        }
+      } finally {
+        recoveryRunningRef.current = false;
+      }
+    })();
   }, [jobs]);
 
   return subscriptionsRef;

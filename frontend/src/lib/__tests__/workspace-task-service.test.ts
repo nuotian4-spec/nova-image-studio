@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ackNovaTask, createNovaTask, type NovaTaskResponse } from '@/lib/ccode-task-client';
-import { downloadAndStoreImages } from '@/lib/image-downloader';
+import { ackNovaTask, createNovaTask, getNovaTask, type NovaTaskResponse } from '@/lib/ccode-task-client';
+import { downloadAndStoreImages, getStoredBlob } from '@/lib/image-downloader';
 import { syncDynamicModelExports } from '@/lib/gemini-config';
 import type { StoredJob } from '@/lib/job-store';
 import { saveRegistry } from '@/lib/nova-models';
 import {
   finalizeCompletedServerTask,
   submitTextToImage,
+  retryDownloadCachedImages,
   type SubmitActions,
 } from '@/lib/workspace-task-service';
 vi.mock('@/lib/ccode-task-client', async importOriginal => {
@@ -15,6 +16,7 @@ vi.mock('@/lib/ccode-task-client', async importOriginal => {
     ...actual,
     ackNovaTask: vi.fn(),
     createNovaTask: vi.fn(),
+    getNovaTask: vi.fn(),
   };
 });
 
@@ -23,11 +25,14 @@ vi.mock('@/lib/image-downloader', async importOriginal => {
   return {
     ...actual,
     downloadAndStoreImages: vi.fn(),
+    getStoredBlob: vi.fn(),
   };
 });
 
 const mockedAckNovaTask = vi.mocked(ackNovaTask);
+const mockedGetNovaTask = vi.mocked(getNovaTask);
 const mockedCreateNovaTask = vi.mocked(createNovaTask);
+const mockedGetStoredBlob = vi.mocked(getStoredBlob);
 const mockedDownloadAndStoreImages = vi.mocked(downloadAndStoreImages);
 
 function makeJob(overrides: Partial<StoredJob> = {}): StoredJob {
@@ -57,6 +62,7 @@ function makeCompletedTask(images: string[]): NovaTaskResponse {
 function createActions(initialJob: StoredJob): { actions: SubmitActions; getJob: () => StoredJob } {
   let currentJob = initialJob;
   const actions: SubmitActions = {
+    getJob: () => currentJob,
     addJob: vi.fn(),
     replaceJob: vi.fn((_jobId, updater) => {
       currentJob = updater(currentJob);
@@ -106,9 +112,12 @@ beforeEach(() => {
   syncDynamicModelExports();
   mockedAckNovaTask.mockReset();
   mockedAckNovaTask.mockResolvedValue(undefined);
+  mockedGetNovaTask.mockReset();
   mockedCreateNovaTask.mockReset();
   mockedCreateNovaTask.mockResolvedValue('task-advanced-1');
   mockedDownloadAndStoreImages.mockReset();
+  mockedGetStoredBlob.mockReset();
+  mockedGetStoredBlob.mockResolvedValue(null);
 });
 
 describe('submitTextToImage', () => {
@@ -177,6 +186,7 @@ describe('finalizeCompletedServerTask', () => {
         successCount: 1,
         failCount: 0,
         blobUrls: ['blob:cached-0'],
+        persisted: [true],
         items: [{ index: 0, status: 'cached', loadedBytes: 10, totalBytes: 10, percent: 100 }],
       };
     });
@@ -185,7 +195,7 @@ describe('finalizeCompletedServerTask', () => {
 
     await finalizeCompletedServerTask(job, makeCompletedTask(['URL:/api/nova/images/task-1/0']), actions);
 
-    expect(actions.completeJob).toHaveBeenCalledTimes(2);
+    expect(actions.completeJob).toHaveBeenCalledTimes(3);
     expect(getJob().images).toEqual(['blob:cached-0']);
     expect(getJob().serverTaskAcked).toBe(true);
     expect(getJob().imageDownloadProgress).toBeUndefined();
@@ -200,6 +210,7 @@ describe('finalizeCompletedServerTask', () => {
         successCount: 1,
         failCount: 1,
         blobUrls: ['blob:cached-0', ''],
+        persisted: [true, false],
         items: [
           { index: 0, status: 'cached', loadedBytes: 10, totalBytes: 10, percent: 100 },
           { index: 1, status: 'failed', loadedBytes: 2, totalBytes: 10, percent: 20, error: 'stream failed' },
@@ -219,8 +230,125 @@ describe('finalizeCompletedServerTask', () => {
       'URL:/api/nova/images/task-1/1',
     ]);
     expect(getJob().serverTaskAcked).toBe(false);
-    expect(getJob().warning).toContain('1 张图片本地缓存失败');
+    expect(getJob().warning).toContain('1 张图片未保存到本机');
     expect(getJob().imageDownloadProgress?.failed).toBe(1);
     expect(mockedAckNovaTask).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('持久化与确认门禁', () => {
+  const successfulDownload = () => ({
+    successCount: 1, failCount: 0, blobUrls: ['blob:saved'], persisted: [true],
+    items: [{ index: 0, status: 'cached' as const, loadedBytes: 10 }],
+  });
+
+  it('元数据提交失败不得ACK，保留来源及真实到期时间', async () => {
+    mockedDownloadAndStoreImages.mockResolvedValue(successfulDownload());
+    const { actions, getJob } = createActions(makeJob());
+    const actualComplete = actions.completeJob;
+    actions.completeJob = vi.fn(async (id, job) => {
+      await actualComplete(id, job);
+      if (job.localPersistence === 'saved') throw new Error('QuotaExceededError');
+    });
+    await finalizeCompletedServerTask(makeJob(), {
+      ...makeCompletedTask(['URL:/server/image']), expiresAt: '2026-10-23T00:00:00Z',
+    }, actions);
+    expect(mockedAckNovaTask).not.toHaveBeenCalled();
+    expect(getJob().localPersistence).toBe('temporary');
+    expect(getJob().recoveryImages).toEqual(['URL:/server/image']);
+    expect(getJob().serverExpiresAt).toBe('2026-10-23T00:00:00Z');
+  });
+
+  it('全部字节与元数据提交之后才ACK，ACK失败最多两次且保留本机成功', async () => {
+    mockedDownloadAndStoreImages.mockResolvedValue(successfulDownload());
+    mockedAckNovaTask.mockRejectedValue(new Error('HTTP 503'));
+    const order: string[] = [];
+    const { actions, getJob } = createActions(makeJob());
+    const actualComplete = actions.completeJob;
+    actions.completeJob = vi.fn(async (id, job) => {
+      await actualComplete(id, job);
+      if (job.localPersistence === 'saved') order.push('committed');
+    });
+    mockedAckNovaTask.mockImplementation(async () => { order.push('ack'); throw new Error('HTTP 503'); });
+    await finalizeCompletedServerTask(makeJob(), makeCompletedTask(['URL:/server/image']), actions);
+    expect(order).toEqual(['committed', 'ack', 'ack']);
+    expect(getJob().localPersistence).toBe('saved');
+    expect(getJob().serverTaskAcked).toBe(false);
+    expect(getJob().warning).toContain('领取确认失败');
+  });
+
+  it('重复完成通知共用一次下载，删除后不得保存或ACK', async () => {
+    let finish!: (value: ReturnType<typeof successfulDownload>) => void;
+    mockedDownloadAndStoreImages.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const { actions } = createActions(makeJob());
+    const first = finalizeCompletedServerTask(makeJob(), makeCompletedTask(['URL:/server/image']), actions);
+    const second = finalizeCompletedServerTask(makeJob(), makeCompletedTask(['URL:/server/image']), actions);
+    await vi.waitFor(() => expect(mockedDownloadAndStoreImages).toHaveBeenCalledTimes(1));
+    actions.getJob = () => undefined;
+    vi.stubGlobal('URL', { revokeObjectURL: vi.fn() });
+    finish(successfulDownload());
+    await Promise.all([first, second]);
+    expect(mockedDownloadAndStoreImages).toHaveBeenCalledTimes(1);
+    expect(actions.completeJob).toHaveBeenCalledTimes(1);
+    expect(mockedAckNovaTask).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('仅临时内存预览的多图结果不可提前ACK', async () => {
+    mockedDownloadAndStoreImages.mockResolvedValue({
+      successCount: 1, failCount: 1, blobUrls: ['blob:saved', 'blob:temporary'], persisted: [true, false],
+      items: [{ index: 0, status: 'cached', loadedBytes: 1 }, { index: 1, status: 'failed', loadedBytes: 1 }],
+    });
+    const { actions, getJob } = createActions(makeJob());
+    await finalizeCompletedServerTask(makeJob(), makeCompletedTask(['URL:/a', 'URL:/b']), actions);
+    expect(getJob().images).toEqual(['blob:saved', 'blob:temporary']);
+    expect(getJob().localPersistedIndexes).toEqual([0]);
+    expect(getJob().localPersistence).toBe('temporary');
+    expect(mockedAckNovaTask).not.toHaveBeenCalled();
+  });
+
+  it('本机完整而服务器过期仍保留本机图片，不查询或重新生成', async () => {
+    const job = makeJob({ status: 'completed', localPersistence: 'saved', images: ['IDB:job-1-0'], serverTaskAcked: true });
+    const { actions, getJob } = createActions(job);
+    await retryDownloadCachedImages(job, actions);
+    expect(getJob().images).toEqual(['IDB:job-1-0']);
+    expect(mockedGetNovaTask).not.toHaveBeenCalled();
+    expect(mockedCreateNovaTask).not.toHaveBeenCalled();
+  });
+
+  it('刷新缺图只取回已有任务；服务端过期保留完成卡片', async () => {
+    const job = makeJob({ status: 'completed', localPersistence: 'missing' });
+    const { actions, getJob } = createActions(job);
+    mockedGetNovaTask.mockResolvedValue({ id: 'task-1', status: 'expired' });
+    await retryDownloadCachedImages(job, actions);
+    expect(mockedGetNovaTask).toHaveBeenCalledWith('task-1');
+    expect(mockedCreateNovaTask).not.toHaveBeenCalled();
+    expect(getJob().status).toBe('completed');
+    expect(getJob().recoveryUnavailable).toBe(true);
+    expect(mockedAckNovaTask).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('多图部分保存后的精确补取', () => {
+  it.each(['IDB:job-1-0', 'blob:already-saved'])('保留已保存槽%s，只下载缺失槽，不受第0远端失效影响', async first => {
+    const job = makeJob({
+      status: 'completed', localPersistence: 'temporary',
+      images: [first, 'URL:/server/1'], localPersistedIndexes: [0],
+      recoveryImages: ['URL:/expired/0', 'URL:/server/1'],
+    });
+    mockedGetStoredBlob.mockImplementation(async (_jobId, index, persistentOnly) => index === 0 && persistentOnly ? new Blob(['old']) : null);
+    mockedGetNovaTask.mockResolvedValue(makeCompletedTask(['URL:/expired/0', 'URL:/server/1']));
+    mockedDownloadAndStoreImages.mockImplementation(async (_id, refs) => {
+      expect(refs).toEqual(['IDB:job-1-0', 'URL:/server/1']);
+      return { successCount: 1, failCount: 0, blobUrls: ['', 'blob:new'], persisted: [false, true], items: [] };
+    });
+    const { actions, getJob } = createActions(job);
+    await retryDownloadCachedImages(job, actions);
+    expect(getJob().images).toEqual(['IDB:job-1-0', 'blob:new']);
+    expect(getJob().localPersistedIndexes).toEqual([0, 1]);
+    expect(getJob().serverTaskAcked).toBe(true);
+    expect(mockedCreateNovaTask).not.toHaveBeenCalled();
   });
 });

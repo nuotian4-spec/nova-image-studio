@@ -3,10 +3,9 @@ import { hasAnyApiKey, hasImageApiKey, hasTextApiKey } from '@/lib/settings-stor
 import {
   deleteImage,
   loadJobs,
-  openDB,
+  restoreJobsFromImages,
   saveImage,
   saveJobs,
-  IMG_STORE,
   type Mode,
   type StoredJob,
 } from '@/lib/job-store';
@@ -34,7 +33,7 @@ export function useWorkspaceJobs() {
   const [hasTextKey, setHasTextKey] = useState(() => hasTextApiKey());
   const [jobs, setJobs] = useState<StoredJob[]>(loadInitialJobs);
   const jobsRef = useRef(jobs);
-  useEffect(() => { jobsRef.current = jobs; }, [jobs]);
+  const removedIdsRef = useRef(new Set<string>());
   const [loadedImages, setLoadedImages] = useState<Set<string>>(new Set());
   const [retryData, setRetryData] = useState<RetryData | null>(null);
   const [clearAllDialogOpen, setClearAllDialogOpen] = useState<Mode | null>(null);
@@ -51,48 +50,50 @@ export function useWorkspaceJobs() {
   }, []);
 
   useEffect(() => {
-    const stored = loadInitialJobs();
-    saveJobs(stored);
-
-    if (stored.length > 0) {
-      openDB()
-        .then(db => {
-          if (!db) return;
-          const request = db.transaction(IMG_STORE, 'readonly').objectStore(IMG_STORE).getAll();
-          request.onsuccess = () => {
-            const imageMap = new Map<string, StoredJob>();
-            for (const image of request.result as StoredJob[]) {
-              imageMap.set(image.id, image);
-            }
-
-            setJobs(prev => prev.map(job => {
-              const image = imageMap.get(job.id);
-              if (!image) return job;
-
-              const persistedImages = image.images || (image.imageData ? [image.imageData] : []);
-              if (persistedImages.length === 0) return job;
-
-              return {
-                ...job,
-                images: persistedImages,
-                imageData: persistedImages[0],
-                refImages: image.refImages,
-                error: image.error,
-              };
-            }));
-            setLoadedImages(new Set(imageMap.keys()));
-          };
-        })
-        .catch(() => undefined);
-    }
+    let cancelled = false;
+    const initialJobs = jobsRef.current;
+    const initialById = new Map(initialJobs.map(job => [job.id, job]));
+    void restoreJobsFromImages(initialJobs).then(restored => {
+      if (cancelled) return;
+      const current = new Map(jobsRef.current.map(job => [job.id, job]));
+      for (const id of restored.deletedIds) {
+        removedIdsRef.current.add(id);
+        current.delete(id);
+      }
+      for (const job of restored.jobs) {
+        if (removedIdsRef.current.has(job.id)) continue;
+        const live = current.get(job.id);
+        // 恢复旧副本不能覆盖本轮已经完成的新写入。
+        if (live === initialById.get(job.id) && !live?.localRecoveryChecked) {
+          const merged = { ...live, ...job, serverTaskAcked: live?.serverTaskAcked || job.serverTaskAcked };
+          current.set(job.id, merged);
+        }
+      }
+      const next = Array.from(current.values()).filter(job => !removedIdsRef.current.has(job.id));
+      jobsRef.current = next;
+      setJobs(next);
+      saveJobs(next);
+      setLoadedImages(new Set(next.filter(job => job.status === 'completed').map(job => job.id)));
+    }).catch(() => {
+      if (cancelled) return;
+      const next = jobsRef.current.map(job => job.status === 'completed' && job === initialById.get(job.id) && !job.localRecoveryChecked ? {
+        ...job,
+        localRecoveryChecked: true,
+        localPersistence: 'missing' as const,
+        warning: '浏览器本机存储不可用；请取回现有图片并立即下载，刷新可能丢失。',
+      } : job);
+      jobsRef.current = next;
+      setJobs(next);
+    });
+    return () => { cancelled = true; };
   }, []);
 
   const persistJobs = useCallback((updater: (prev: StoredJob[]) => StoredJob[]) => {
-    setJobs(prev => {
-      const next = updater(prev);
-      saveJobs(next);
-      return next;
-    });
+    // 立即推进异步读取快照，避免下载完成与删除在React批处理之间读取旧列表。
+    const next = updater(jobsRef.current);
+    jobsRef.current = next;
+    saveJobs(next);
+    setJobs(next);
   }, []);
 
   const addJob = useCallback((job: StoredJob) => {
@@ -113,13 +114,19 @@ export function useWorkspaceJobs() {
   }, []);
 
   const completeJob = useCallback(async (jobId: string, job: StoredJob) => {
-    persistJobs(prev => prev.map(current => (current.id === jobId ? job : current)));
-    setLoadedImages(prev => {
-      const next = new Set(prev);
-      next.add(job.id);
-      return next;
-    });
-    await saveImage(job).catch(() => undefined);
+    if (removedIdsRef.current.has(jobId) || !jobsRef.current.some(current => current.id === jobId)) {
+      throw new Error('任务已删除，停止保存');
+    }
+    // 允许当前页面先预览，但“已保存”必须等持久事务提交。
+    const preview = job.localPersistence === 'saved' ? { ...job, localPersistence: 'saving' as const } : job;
+    persistJobs(prev => prev.map(current => current.id === jobId ? preview : current));
+    setLoadedImages(prev => new Set(prev).add(jobId));
+    await saveImage(job);
+    if (removedIdsRef.current.has(jobId) || !jobsRef.current.some(current => current.id === jobId)) {
+      await deleteImage(jobId);
+      throw new Error('任务已删除，停止保存');
+    }
+    persistJobs(prev => prev.map(current => current.id === jobId ? job : current));
   }, [persistJobs]);
 
   const failJob = useCallback(async (jobId: string, error: string, options?: { terminal?: boolean }) => {
@@ -145,6 +152,7 @@ export function useWorkspaceJobs() {
 
   const removeJob = useCallback(async (jobId: string) => {
     const removedJob = jobsRef.current.find(job => job.id === jobId);
+    removedIdsRef.current.add(jobId);
     if (removedJob?.blobUrls) {
       revokeBlobUrls(removedJob.blobUrls);
     }
@@ -168,6 +176,7 @@ export function useWorkspaceJobs() {
     }
 
     for (const job of toRemove) {
+      removedIdsRef.current.add(job.id);
       if (job.blobUrls) {
         revokeBlobUrls(job.blobUrls);
       }
@@ -213,11 +222,12 @@ export function useWorkspaceJobs() {
         replaceJob,
         completeJob,
         failJob,
+        getJob,
       });
     } catch {
       // retryDownload failure is non-critical
     }
-  }, [addJob, replaceJob, completeJob, failJob]);
+  }, [addJob, replaceJob, completeJob, failJob, getJob]);
 
   return {
     hasApiKey,

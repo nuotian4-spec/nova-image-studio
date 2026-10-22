@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { resolveImageTaskProvider } from '@/lib/ccode-task-client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ackNovaTask, resolveImageTaskProvider } from '@/lib/ccode-task-client';
 import { resetEmbedRuntimeForTests } from '@/lib/embed/mode';
 import { saveRegistry } from '@/lib/nova-models';
 
@@ -15,6 +15,23 @@ const EMBED_IMAGE = {
   maxOutputSize: '4K' as const,
   supportsAdvancedParams: true,
 };
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('领取确认HTTP契约', () => {
+  it.each([400, 404, 500])('HTTP %s不得确认成功', async status => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status })));
+    await expect(ackNovaTask('task')).rejects.toMatchObject({ statusCode: status });
+  });
+  it('网络错误不得吞掉', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    await expect(ackNovaTask('task')).rejects.toThrow('offline');
+  });
+  it('HTTP 204允许确认成功', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    await expect(ackNovaTask('task')).resolves.toBeUndefined();
+  });
+});
 
 describe('resolveImageTaskProvider', () => {
   beforeEach(() => {

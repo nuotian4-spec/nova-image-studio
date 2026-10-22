@@ -336,9 +336,12 @@ export async function getNovaQueueStatus(): Promise<NovaQueueStatus> {
 }
 
 export async function ackNovaTask(taskId: string): Promise<void> {
-  await fetch(`/api/nova/tasks/${encodeURIComponent(taskId)}/ack`, {
+  const response = await fetchWithTimeout(`/api/nova/tasks/${encodeURIComponent(taskId)}/ack`, {
     method: 'POST',
-  }).catch(() => undefined);
+  }, TASK_REQUEST_TIMEOUT);
+  if (!response.ok) {
+    throw new NovaTaskError(`领取确认失败: ${response.status}`, response.status);
+  }
 }
 
 // ===== 向后兼容别名 =====
