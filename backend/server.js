@@ -14,7 +14,8 @@ const { validateAndNormalizeInput, InputError } = require('./plugin-runtime/inpu
 const { createMediaStore } = require('./plugin-runtime/media');
 const { rewriteParentGatewayBaseUrl } = require('./rewrite-parent-gateway-base-url');
 const { shouldSkipImageStream, shouldRetryImageWithoutStream } = require('./image-stream-fallback');
-const { extractGeminiImagePayload, readGeminiResponse } = require('./gemini-image-response');
+const { readGeminiResponse } = require('./gemini-image-response');
+const { resolveGeminiImagePayload } = require('./gemini-remote-image');
 
 const ENV_FILE_PATH = process.env.NOVA_ENV_FILE || path.join(process.cwd(), '.env');
 const TASK_STATUS = {
@@ -691,6 +692,7 @@ function readRawBody(req, maxBytes) {
 
 function normalizeError(error) {
   const message = error instanceof Error ? error.message : String(error);
+  if (error?.stage === 'geminiRemoteImage') return message;
   if (/failed to fetch|fetch failed|networkerror|network request failed|load failed|network connection was lost|econnreset|socket hang up|terminated/i.test(message)) {
     return '网络连接失败。请检查服务器网络连接或稍后重试。';
   }
@@ -1323,7 +1325,7 @@ async function generateNovaGeminiImage(apiKey, request, options = {}) {
     const summary = summarizeUnexpectedResponse(responseText);
     throw new Error(summary ? `响应 JSON 格式无效: ${summary}` : '响应 JSON 格式无效');
   }
-  return extractGeminiImagePayload(data);
+  return resolveGeminiImagePayload(data);
 }
 
 function drainQueue() {
@@ -1381,6 +1383,7 @@ async function generateSingleImage(apiKey, request, taskId, index) {
       .run(JSON.stringify(diskRefs), new Date().toISOString(), taskId, index);
     return { success: true, images: diskRefs };
   } catch (error) {
+    if (error?.stage === 'geminiRemoteImage') stage = error.stage;
     const raw = error instanceof Error ? error.message : String(error);
     console.warn(`[generateSingleImage] stage=${stage} protocol=${request?.protocol || ''} model=${request?.model || ''} taskId=${taskId}: ${raw}`);
     const message = normalizeError(error);

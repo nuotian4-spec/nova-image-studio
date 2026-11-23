@@ -7,7 +7,7 @@ const MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 function fail(message) { throw new Error(`Gemini 图片响应：${message}`); }
 function object(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 
-// 仅接受已知字段，不递归寻找任意字符串，也不下载上游返回的 URL。
+// 仅接受已知字段；结构解析不执行网络请求。
 function mergedField(items, names) {
   let result = '';
   for (const item of items) {
@@ -53,7 +53,7 @@ function decodeImage(encoded, declaredMime) {
   return { data: buffer.toString('base64'), mimeType: actual };
 }
 
-function extractGeminiImagePayload(input) {
+function* geminiImageCandidates(input) {
   let layer = input;
   const candidates = [];
   for (let depth = 0; ; depth++) {
@@ -71,6 +71,7 @@ function extractGeminiImagePayload(input) {
     layer = layer.response;
   }
   let unavailable;
+  let offered = false;
   for (const candidate of candidates) {
     try {
       if (!object(candidate)) fail('候选内容格式无效');
@@ -89,9 +90,13 @@ function extractGeminiImagePayload(input) {
           const fields = inline.length ? inline : files;
           const mime = mergedField(fields, ['mimeType', 'mime_type']);
           const encoded = mergedField(fields, inline.length ? ['data'] : ['fileUri', 'file_uri']);
-          if (files.length && !encoded.startsWith('data:')) fail('远程图片引用不受支持，请上游返回内嵌图片');
+          if (mime && !MIMES.has(mime)) fail('图片 MIME 不受支持');
           // 单图任务交付首个可用结果；不让后续未交付候选覆盖已有结果。
-          return decodeImage(encoded, mime);
+          const result = files.length && encoded && !encoded.startsWith('data:')
+            ? { type: 'remote', url: encoded, mimeType: mime }
+            : { type: 'inline', payload: decodeImage(encoded, mime) };
+          offered = true;
+          yield result;
         } catch (error) {
           unavailable = error;
         }
@@ -100,8 +105,16 @@ function extractGeminiImagePayload(input) {
       unavailable = error;
     }
   }
+  if (offered) return;
   if (unavailable) throw unavailable;
   fail('响应中无图片数据');
+}
+
+function extractGeminiImagePayload(input) {
+  for (const candidate of geminiImageCandidates(input)) {
+    if (candidate.type === 'inline') return candidate.payload;
+  }
+  fail('远程图片引用需要异步解析');
 }
 
 async function readGeminiResponse(response) {
@@ -121,4 +134,4 @@ async function readGeminiResponse(response) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-module.exports = { extractGeminiImagePayload, readGeminiResponse };
+module.exports = { extractGeminiImagePayload, geminiImageCandidates, decodeImage, readGeminiResponse, MAX_IMAGE_BYTES };
